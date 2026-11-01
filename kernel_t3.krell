@@ -1,0 +1,3499 @@
+; K0 template part 3: the heap, Multiboot modules, and the
+; Krell bytecode runner. Functions are written callee-first so
+; the module also parses with the v1 release toolchain.
+
+; ---- absolute memory access ------------------------------------
+
+fn mload(i64) -> i64 {
+  entry(a: i64):
+    %p = bitcast ptr a
+    %v = load i64, %p
+    ret %v
+}
+
+fn mstore(i64, i64) -> void {
+  entry(a: i64, v: i64):
+    %p = bitcast ptr a
+    store i64 %p, v
+    ret
+}
+
+fn mload8(i64) -> i64 {
+  entry(a: i64):
+    %p = bitcast ptr a
+    %b = load i8, %p
+    %v = zext i64 %b
+    ret %v
+}
+
+fn mstore8(i64, i64) -> void {
+  entry(a: i64, v: i64):
+    %p = bitcast ptr a
+    %b = trunc i8 v
+    store i8 %p, %b
+    ret
+}
+
+fn mload32(i64) -> i64 {
+  entry(a: i64):
+    %p = bitcast ptr a
+    %w = load i32, %p
+    %v = zext i64 %w
+    ret %v
+}
+
+fn mstore32(i64, i32) -> void {
+  entry(a: i64, v: i32):
+    %p = bitcast ptr a
+    store i32 %p, v
+    ret
+}
+
+; ---- the heap ---------------------------------------------------
+; kmalloc/kfree over the PMM. heap_init takes 256 frames (1 MiB)
+; from the PMM; the bitmap scan hands out consecutive frames and
+; heap_init verifies the run is contiguous. A block header is 16
+; bytes: +0 size in bytes (header included; bit 0 set = in use,
+; sizes are multiples of 16 so the bit is spare), +8 next free
+; block address (free blocks only). Payloads are 16-aligned.
+; First fit with splitting; kfree coalesces against the list.
+; State (arena): 0xB000 free list head (address, 0 = none)
+;   0xB008 region base   0xB010 region end
+;   0xB018 live allocations   0xB020 free bytes (block sizes)
+
+fn heap_init() -> void {
+  entry():
+    %e1 = iconst i64 1
+    %e16 = iconst i64 16
+    %d56 = iconst i64 45056
+    %d88 = iconst i64 45088
+    br get(0, 0, -1)
+  get(i: i64, base: i64, prev: i64):
+    %done = icmp.sge i64 i, 256
+    condbr %done, build(base), body(i, base, prev)
+  body(i: i64, base: i64, prev: i64):
+    %a = call i64 pmm_alloc()
+    %bad = icmp.eq i64 %a, -1
+    condbr %bad, fail(), chk(i, base, prev, %a)
+  chk(i: i64, base: i64, prev: i64, a: i64):
+    %first = icmp.eq i64 i, 0
+    condbr %first, setb(i, a), cont(i, base, prev, a)
+  setb(i: i64, a: i64):
+    br next(i, a, a)
+  cont(i: i64, base: i64, prev: i64, a: i64):
+    %want = add i64 prev, 4096
+    %ok = icmp.eq i64 a, %want
+    condbr %ok, next(i, base, a), fail()
+  next(i: i64, base: i64, prev: i64):
+    %i2 = add i64 i, 1
+    br get(%i2, base, prev)
+  build(base: i64):
+    %end = add i64 base, 1048576
+    call void st64(45064, base)
+    %eh = add i64 base, 16
+    call void st64(45072, %end)
+    call void st64(45056, base)
+    call void st64(45080, 0)
+    call void st64(45088, 1048576)
+    call void mstore(base, 1048576)
+    %nb = add i64 base, 8
+    call void mstore(%nb, 0)
+    ret
+  fail():
+    call void st64(45056, 0)
+    call void st64(45088, 0)
+    ret
+}
+
+fn kmalloc(i64) -> i64 {
+  entry(n: i64):
+    %e1 = iconst i64 1
+    %d8 = iconst i64 8
+    %small = icmp.slt i64 n, 16
+    %want = select i64 %small, 16, n
+    %w15 = add i64 %want, 15
+    %wmask = and i64 %w15, -16
+    %need = add i64 %wmask, 16
+    %head = call i64 ld64(45056)
+    %none = icmp.eq i64 %head, 0
+    condbr %none, oom(), walk(0, %head, %need)
+  walk(prev: i64, blk: i64, need: i64):
+    %no = icmp.eq i64 blk, 0
+    condbr %no, oom(), chk(prev, blk, need)
+  chk(prev: i64, blk: i64, need: i64):
+    %sz = call i64 mload(blk)
+    %fits = icmp.sge i64 %sz, need
+    condbr %fits, take(prev, blk, need, %sz), adv(prev, blk, need)
+  adv(prev: i64, blk: i64, need: i64):
+    %nb = add i64 blk, 8
+    %nx = call i64 mload(%nb)
+    br walk(blk, %nx, need)
+  take(prev: i64, blk: i64, need: i64, sz: i64):
+    %rem = sub i64 sz, need
+    %split = icmp.sge i64 %rem, 32
+    condbr %split, dosplit(prev, blk, need, %rem), whole(prev, blk, sz)
+  dosplit(prev: i64, blk: i64, need: i64, rem: i64):
+    %nb = add i64 blk, 8
+    %oldnx = call i64 mload(%nb)
+    %rb = add i64 blk, need
+    call void mstore(%rb, %rem)
+    %rn = add i64 %rb, 8
+    call void mstore(%rn, %oldnx)
+    br link(prev, blk, need, %rb)
+  whole(prev: i64, blk: i64, sz: i64):
+    %nb = add i64 blk, 8
+    %oldnx = call i64 mload(%nb)
+    br link(prev, blk, sz, %oldnx)
+  link(prev: i64, blk: i64, usedsz: i64, newnext: i64):
+    %noprev = icmp.eq i64 prev, 0
+    condbr %noprev, sethead(newnext), setprev(prev, newnext)
+  sethead(newnext: i64):
+    call void st64(45056, newnext)
+    br mark(blk, usedsz)
+  setprev(prev: i64, newnext: i64):
+    %pn = add i64 prev, 8
+    call void mstore(%pn, newnext)
+    br mark(blk, usedsz)
+  mark(blk: i64, usedsz: i64):
+    %mu = or i64 usedsz, 1
+    call void mstore(blk, %mu)
+    %lv = call i64 ld64(45080)
+    %lv2 = add i64 %lv, 1
+    call void st64(45080, %lv2)
+    %fb = call i64 ld64(45088)
+    %fb2 = sub i64 %fb, usedsz
+    call void st64(45088, %fb2)
+    %pay = add i64 blk, 16
+    ret %pay
+  oom():
+    ret 0
+}
+
+fn kfree(i64) -> void {
+  entry(p: i64):
+    %e1 = iconst i64 1
+    %no = icmp.eq i64 p, 0
+    condbr %no, fin(), go(p)
+  go(p: i64):
+    %blk = sub i64 p, 16
+    %mu = call i64 mload(%blk)
+    %used = and i64 %mu, 1
+    %was = icmp.eq i64 %used, 1
+    condbr %was, rel(%blk, %mu), fin()
+  rel(blk: i64, mu: i64):
+    %sz = and i64 mu, -2
+    call void mstore(blk, %sz)
+    %head = call i64 ld64(45056)
+    %nb = add i64 blk, 8
+    call void mstore(%nb, %head)
+    call void st64(45056, blk)
+    %lv = call i64 ld64(45080)
+    %lv2 = sub i64 %lv, 1
+    call void st64(45080, %lv2)
+    %fb = call i64 ld64(45088)
+    %fb2 = add i64 %fb, %sz
+    call void st64(45088, %fb2)
+    call void heap_coal()
+    br fin()
+  fin():
+    ret
+}
+
+; one coalescing sweep: merge every free block with a free block
+; that starts exactly where it ends; repeat until stable
+fn heap_coal() -> void {
+  entry():
+    br outer()
+  outer():
+    %ch = call i64 heap_coal_pass()
+    %again = icmp.ne i64 %ch, 0
+    condbr %again, outer(), fin()
+  fin():
+    ret
+}
+
+fn heap_coal_pass() -> i64 {
+  entry():
+    %e1 = iconst i64 1
+    %d8 = iconst i64 8
+    %head = call i64 ld64(45056)
+    br scan(0, %head)
+  scan(prev: i64, x: i64):
+    %no = icmp.eq i64 x, 0
+    condbr %no, done(), inner(prev, x, x)
+  inner(prev: i64, x: i64, y: i64):
+    %yb = add i64 y, 8
+    %yn = call i64 mload(%yb)
+    %no = icmp.eq i64 %yn, 0
+    condbr %no, adv(prev, x), chk(prev, x, y, %yn)
+  chk(prev: i64, x: i64, y: i64, yn: i64):
+    %xsz = call i64 mload(x)
+    %xend = add i64 x, %xsz
+    %hit = icmp.eq i64 %xend, yn
+    condbr %hit, absorb(prev, x, y, yn), inner(prev, x, yn)
+  absorb(prev: i64, x: i64, y: i64, yn: i64):
+    %xsz = call i64 mload(x)
+    %ysz = call i64 mload(yn)
+    %tot = add i64 %xsz, %ysz
+    call void mstore(x, %tot)
+    %ynb = add i64 yn, 8
+    %ynn = call i64 mload(%ynb)
+    %xb = add i64 x, 8
+    %cur = call i64 mload(%xb)
+    %isy = icmp.eq i64 %cur, yn
+    condbr %isy, fixx(x, %ynn), fixy(y, %ynn)
+  fixx(x: i64, ynn: i64):
+    %xb = add i64 x, 8
+    call void mstore(%xb, ynn)
+    ret 1
+  fixy(y: i64, ynn: i64):
+    %yb = add i64 y, 8
+    call void mstore(%yb, ynn)
+    ret 1
+  adv(prev: i64, x: i64):
+    %xb = add i64 x, 8
+    %xn = call i64 mload(%xb)
+    br scan(x, %xn)
+  done():
+    ret 0
+}
+
+fn heap_largest() -> i64 {
+  entry():
+    %head = call i64 ld64(45056)
+    br walk(%head, 0)
+  walk(blk: i64, best: i64):
+    %no = icmp.eq i64 blk, 0
+    condbr %no, done(best), body(blk, best)
+  body(blk: i64, best: i64):
+    %sz = call i64 mload(blk)
+    %big = icmp.sgt i64 %sz, best
+    %nb2 = select i64 %big, %sz, best
+    %nb = add i64 blk, 8
+    %nx = call i64 mload(%nb)
+    br walk(%nx, %nb2)
+  done(best: i64):
+    ret best
+}
+
+; ---- heap shell commands -----------------------------------------
+
+fn cmd_heap() -> void {
+  entry():
+    %a = call ptr s_heapa()
+    call void con_write(%a)
+    %base = call i64 ld64(45064)
+    call void putu(%base)
+    %b = call ptr s_heapb()
+    call void con_write(%b)
+    %fb = call i64 ld64(45088)
+    call void putu(%fb)
+    %c = call ptr s_heapc()
+    call void con_write(%c)
+    %lv = call i64 ld64(45080)
+    call void putu(%lv)
+    %d = call ptr s_heapd()
+    call void con_write(%d)
+    %lg = call i64 heap_largest()
+    call void putu(%lg)
+    call void con_putc(10)
+    ret
+}
+
+fn hfill(i64, i64, i64) -> void {
+  entry(p: i64, n: i64, pat: i64):
+    br loop(p, n, pat, 0)
+  loop(p: i64, n: i64, pat: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(p, n, pat, i)
+  body(p: i64, n: i64, pat: i64, i: i64):
+    %a = add i64 p, i
+    call void mstore8(%a, pat)
+    %i2 = add i64 i, 1
+    br loop(p, n, pat, %i2)
+  fin():
+    ret
+}
+
+fn hcheck(i64, i64, i64) -> i64 {
+  entry(p: i64, n: i64, pat: i64):
+    %d1 = iconst i64 1
+    br loop(p, n, pat, 0)
+  loop(p: i64, n: i64, pat: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, ok(), body(p, n, pat, i)
+  body(p: i64, n: i64, pat: i64, i: i64):
+    %a = add i64 p, i
+    %v = call i64 mload8(%a)
+    %eq = icmp.eq i64 %v, pat
+    condbr %eq, next(p, n, pat, i), bad()
+  next(p: i64, n: i64, pat: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(p, n, pat, %i2)
+  ok():
+    ret 1
+  bad():
+    ret 0
+}
+
+fn cmd_htest() -> void {
+  entry():
+    %e1 = iconst i64 1
+    %d10 = iconst i64 10
+    %a = call i64 kmalloc(100)
+    %b = call i64 kmalloc(5000)
+    %c = call i64 kmalloc(64)
+    call void hfill(%a, 100, 161)
+    call void hfill(%b, 5000, 162)
+    call void hfill(%c, 64, 163)
+    %k1 = call i64 hcheck(%a, 100, 161)
+    %k2 = call i64 hcheck(%b, 5000, 162)
+    %k3 = call i64 hcheck(%c, 64, 163)
+    %s1 = add i64 %k1, %k2
+    %sum = add i64 %s1, %k3
+    %okp = icmp.eq i64 %sum, 3
+    condbr %okp, p1(%a, %b, %c), f1(%a, %b, %c)
+  p1(a: i64, b: i64, c: i64):
+    %m = call ptr s_htp1()
+    call void con_write(%m)
+    call void con_putc(10)
+    br s2(a, b, c)
+  f1(a: i64, b: i64, c: i64):
+    %m = call ptr s_htf()
+    call void con_write(%m)
+    call void con_putc(10)
+    br s2(a, b, c)
+  s2(a: i64, b: i64, c: i64):
+    call void kfree(b)
+    %d = call i64 kmalloc(4000)
+    call void hfill(%d, 4000, 164)
+    %k4 = call i64 hcheck(%d, 4000, 164)
+    %k5 = call i64 hcheck(a, 100, 161)
+    %s3 = add i64 %k4, %k5
+    %ok2 = icmp.eq i64 %s3, 2
+    condbr %ok2, p2(a, c, %d), f2(a, c, %d)
+  p2(a: i64, c: i64, d: i64):
+    %m = call ptr s_htp2()
+    call void con_write(%m)
+    call void con_putc(10)
+    br s3(a, c, d)
+  f2(a: i64, c: i64, d: i64):
+    %m = call ptr s_htf()
+    call void con_write(%m)
+    call void con_putc(10)
+    br s3(a, c, d)
+  s3(a: i64, c: i64, d: i64):
+    call void kfree(a)
+    call void kfree(c)
+    call void kfree(d)
+    %big = call i64 kmalloc(900000)
+    %got = icmp.ne i64 %big, 0
+    condbr %got, p3(%big), f3()
+  p3(big: i64):
+    call void hfill(%big, 900000, 165)
+    %k6 = call i64 hcheck(%big, 900000, 165)
+    call void kfree(%big)
+    %ok3 = icmp.eq i64 %k6, 1
+    condbr %ok3, p4(), f3()
+  p4():
+    %lv = call i64 ld64(45080)
+    %fb = call i64 ld64(45088)
+    %okl = icmp.eq i64 %lv, 0
+    %okf = icmp.eq i64 %fb, 1048576
+    %oklz = zext i64 %okl
+    %okfz = zext i64 %okf
+    %both = and i64 %oklz, %okfz
+    %isok = icmp.ne i64 %both, 0
+    condbr %isok, pass(), f3()
+  pass():
+    %m = call ptr s_htp3()
+    call void con_write(%m)
+    call void con_putc(10)
+    ret
+  f3():
+    %m = call ptr s_htf()
+    call void con_write(%m)
+    call void con_putc(10)
+    ret
+}
+
+; ---- Multiboot modules (the ramdisk) -----------------------------
+; State (arena): 0xB100 module count; the table at 0xB108 holds
+; 8 records of 32 bytes: +0 start address, +8 size, +16 address
+; of the loader-supplied name string. Module frames are marked
+; used in the PMM so the heap and the frame allocator never
+; hand them out.
+
+fn mods_init(ptr) -> void {
+  entry(mbi: ptr):
+    %e1 = iconst i64 1
+    %e45376 = iconst i64 45376
+    %mb = bitcast i64 mbi
+    %fl = call i64 mload32(%mb)
+    %has = and i64 %fl, 8
+    %no = icmp.eq i64 %has, 0
+    condbr %no, none(), go(%mb)
+  none():
+    call void st64(45376, 0)
+    ret
+  go(mb: i64):
+    %ca = add i64 mb, 20
+    %cnt = call i64 mload32(%ca)
+    %aa = add i64 mb, 24
+    %addr = call i64 mload32(%aa)
+    %big = icmp.sgt i64 %cnt, 8
+    %cap = select i64 %big, 8, %cnt
+    call void st64(45376, %cap)
+    br loop(0, %cap, %addr)
+  loop(i: i64, cnt: i64, addr: i64):
+    %done = icmp.sge i64 i, cnt
+    condbr %done, fin(), body(i, cnt, addr)
+  body(i: i64, cnt: i64, addr: i64):
+    %rec = mul i64 i, 16
+    %rp = add i64 addr, %rec
+    %start = call i64 mload32(%rp)
+    %ep = add i64 %rp, 4
+    %end = call i64 mload32(%ep)
+    %sp = add i64 %rp, 8
+    %str = call i64 mload32(%sp)
+    %toff = mul i64 i, 32
+    %tp = add i64 45384, %toff
+    call void mstore(%tp, %start)
+    %size = sub i64 %end, %start
+    %tp8 = add i64 %tp, 8
+    call void mstore(%tp8, %size)
+    %tp16 = add i64 %tp, 16
+    call void mstore(%tp16, %str)
+    %f0 = lshr i64 %start, 12
+    %em1 = sub i64 %end, 1
+    %f1a = lshr i64 %em1, 12
+    %f1 = add i64 %f1a, 1
+    call void set_range(%f0, %f1)
+    %i2 = add i64 i, 1
+    br loop(%i2, cnt, addr)
+  fin():
+    %nf = call i64 count_free()
+    call void st64(488, %nf)
+    ret
+}
+
+fn cmd_mods() -> void {
+  entry():
+    %a = call ptr s_modsa()
+    call void con_write(%a)
+    %n = call i64 ld64(45376)
+    call void putu(%n)
+    call void con_putc(10)
+    br loop(0, %n)
+  loop(i: i64, n: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(i, n)
+  body(i: i64, n: i64):
+    call void putu(i)
+    call void con_putc(32)
+    %toff = mul i64 i, 32
+    %tp = add i64 45384, %toff
+    %sp = add i64 %tp, 16
+    %str = call i64 mload(%sp)
+    %np = bitcast ptr %str
+    call void con_write(%np)
+    call void con_putc(32)
+    %szp = add i64 %tp, 8
+    %sz = call i64 mload(%szp)
+    call void putu(%sz)
+    %b = call ptr s_modsb()
+    call void con_write(%b)
+    %sta = call i64 mload(%tp)
+    call void putu(%sta)
+    call void con_putc(10)
+    %i2 = add i64 i, 1
+    br loop(%i2, n)
+  fin():
+    ret
+}
+
+; ---- the module runner -------------------------------------------
+; K0 runs Krell modules: the canonical KREL binary format,
+; decoded and interpreted here, in Krell. A module instance gets
+; two heap regions: A (decoded tables, call frames, values) and
+; B (the module byte space, 256 KiB: data blobs, then a bump
+; heap). Pointers inside a module are offsets into B. Supported:
+; the scalar instruction set (integer, float, memory, control,
+; calls). Vector and atomic instructions fault at load. One
+; deviation: module fma is evaluated as fmul then fadd (the
+; kernel links without libm, so no fused fma is available).
+; Host services, matched by extern name:
+;   kprint(ptr)  print a NUL-terminated string from B
+;   kputn(i64)   print a decimal integer
+;   kputc(i64)   print one character
+;   kticks()     the kernel tick counter
+;   kalloc(i64)  bump-allocate in B (reclaimed whole at exit)
+;   kfree(i64)   no operation (see kalloc)
+; Runner state (arena, decimal offsets used in the code):
+;   45824 A base   45832 B base   45840 steps   45848 status
+;   (0 run, 1 done, 2 fault)   45856 exit/fault code
+;   45864 frame top (offset in A)   45872 values bump (offset in A)
+;   45880 B bump offset   45888 module base (host address)
+;   45896 decode cursor   45904 decode end
+;   45912 name offset   45920 name length
+;   45928 type kind   45936 type bits   45944 current record
+;   cursors at 45952: +0 func +8 block +16 instr +24 pool
+;     +32 value types +40 blob +48 extern +56 data
+;   46016 current func   46024 current func value-types offset
+;   46032 current max value id   46040 pass flag
+;   46080 argument scratch (16 i64)
+; A header (offsets in A): 0 nfuncs 8 nblocks 16 ninstrs
+;   24 pool size 32 nexterns 40 ndata 48 blob bytes 56 value slots
+;   64 main index 72 B data end 80 frames offset 88 values offset
+;   104 blocks offset 112 instrs offset 120 pool offset
+;   128 value-types offset 136 externs offset 144 data offset
+;   152 A size
+; Records: func 64 B (+0 name off, +8 name len, +16 ret kind,
+;   +24 ret bits, +32 first block, +40 block count, +48 values,
+;   +56 value-types offset); block 48 B (+0 func, +8 arg count,
+;   +16 arg pool index, +24 first instr, +32 instr count);
+;   instr 144 B (+0 op, +8 result, +16 type kind, +24 type bits,
+;   +32 a, +40 b, +48 c, +56 imm, +64 pred, +72 block, +80 block2,
+;   +88 callee, +96 callee extern, +104 arg count, +112 args pool
+;   index, +120 arg2 count, +128 args2 pool index, +136 GEP elem
+;   bytes); extern 32 B (+0 name off, +8 name len, +16 host id,
+;   +24 params); data 16 B (+0 B offset, +8 length);
+;   value type 16 B (+0 kind, +8 bits); frame 56 B (+0 func,
+;   +8 block, +16 pc, +24 values base, +32 return slot,
+;   +40 return block, +48 return pc)
+
+fn rd8() -> i64 {
+  entry():
+    %p = call i64 ld64(45896)
+    %v = call i64 mload8(%p)
+    %p2 = add i64 %p, 1
+    call void st64(45896, %p2)
+    ret %v
+}
+
+fn ruleb() -> i64 {
+  entry():
+    br loop(0, 0)
+  loop(v: i64, sh: i64):
+    %x = call i64 rd8()
+    %lo = and i64 %x, 127
+    %part = shl i64 %lo, %sh
+    %v2 = or i64 v, %part
+    %cont = and i64 %x, 128
+    %more = icmp.ne i64 %cont, 0
+    %sh2 = add i64 %sh, 7
+    condbr %more, loop(%v2, %sh2), fin(%v2)
+  fin(v: i64):
+    ret v
+}
+
+fn rsleb() -> i64 {
+  entry():
+    br loop(0, 0, 0)
+  loop(v: i64, sh: i64, last: i64):
+    %x = call i64 rd8()
+    %lo = and i64 %x, 127
+    %part = shl i64 %lo, %sh
+    %v2 = or i64 v, %part
+    %cont = and i64 %x, 128
+    %more = icmp.ne i64 %cont, 0
+    %sh2 = add i64 %sh, 7
+    condbr %more, loop(%v2, %sh2, %x), fin(%v2, %sh2, %x)
+  fin(v: i64, sh: i64, last: i64):
+    %sign = and i64 last, 64
+    %is = icmp.ne i64 %sign, 0
+    condbr %is, neg(v, %sh), pos(v)
+  neg(v: i64, sh: i64):
+    %top = shl i64 -1, %sh
+    %r = or i64 v, %top
+    ret %r
+  pos(v: i64):
+    ret v
+}
+
+fn rval() -> i64 {
+  entry():
+    %v = call i64 ruleb()
+    %r = sub i64 %v, 1
+    ret %r
+}
+
+; reads a type; kind lands at 45928, bits at 45936
+fn rdtype() -> void {
+  entry():
+    %e45936 = iconst i64 45936
+    %e0 = iconst i64 0
+    %k = call i64 rd8()
+    call void st64(45928, %k)
+    %is1 = icmp.eq i64 %k, 1
+    condbr %is1, bits(), chkf(%k)
+  bits():
+    %b = call i64 rd8()
+    call void st64(45936, %b)
+    ret
+  chkf(k: i64):
+    %is2 = icmp.eq i64 k, 2
+    condbr %is2, bits(), chkv(k)
+  chkv(k: i64):
+    %is4 = icmp.eq i64 k, 4
+    condbr %is4, vec(), done()
+  vec():
+    %e1 = call i64 rd8()
+    %e2 = call i64 rd8()
+    %e3 = call i64 rd8()
+    call void st64(45936, 0)
+    ret
+  done():
+    call void st64(45936, 0)
+    ret
+}
+
+; byte size of the type in the type globals
+fn rdtsz() -> i64 {
+  entry():
+    %e8 = iconst i64 8
+    %k = call i64 ld64(45928)
+    %b = call i64 ld64(45936)
+    %is3 = icmp.eq i64 %k, 3
+    condbr %is3, eight(), num(%k, %b)
+  eight():
+    ret 8
+  num(k: i64, b: i64):
+    %is0 = icmp.eq i64 k, 0
+    condbr %is0, zero(), sz(b)
+  zero():
+    ret 0
+  sz(b: i64):
+    %q = sdiv i64 b, 8
+    %lt = icmp.slt i64 %q, 1
+    %r = select i64 %lt, 1, %q
+    ret %r
+}
+
+; reads a name; module-relative offset at 45912, length at 45920
+fn rdname() -> void {
+  entry():
+    %n = call i64 ruleb()
+    %p = call i64 ld64(45896)
+    %base = call i64 ld64(45888)
+    %off = sub i64 %p, %base
+    call void st64(45912, %off)
+    call void st64(45920, %n)
+    %p2 = add i64 %p, %n
+    call void st64(45896, %p2)
+    ret
+}
+
+; compare the module name at (off, len) with a kernel string
+fn name_eq(i64, i64, ptr) -> i64 {
+  entry(off: i64, len: i64, kp: ptr):
+    %mb = call i64 ld64(45888)
+    br loop(off, len, kp, %mb, 0)
+  loop(off: i64, len: i64, kp: ptr, mb: i64, i: i64):
+    %done = icmp.sge i64 i, len
+    condbr %done, tail(kp, len), body(off, len, kp, mb, i)
+  tail(kp: ptr, len: i64):
+    %p = gep i8 kp, len
+    %b = load i8, %p
+    %z = icmp.eq i8 %b, 0
+    %r = zext i64 %z
+    ret %r
+  body(off: i64, len: i64, kp: ptr, mb: i64, i: i64):
+    %a = add i64 mb, off
+    %a2 = add i64 %a, i
+    %x = call i64 mload8(%a2)
+    %p = gep i8 kp, i
+    %y8 = load i8, %p
+    %y = zext i64 %y8
+    %eq = icmp.eq i64 %x, %y
+    condbr %eq, next(off, len, kp, mb, i), no()
+  next(off: i64, len: i64, kp: ptr, mb: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(off, len, kp, mb, %i2)
+  no():
+    ret 0
+}
+
+; resolve an extern name to a host service id (0 = unknown)
+fn host_id(i64, i64) -> i64 {
+  entry(off: i64, len: i64):
+    %k = call ptr s_hk1()
+    %e = call i64 name_eq(off, len, %k)
+    %y = icmp.ne i64 %e, 0
+    condbr %y, r1(), n2(off, len)
+  r1():
+    ret 1
+  n2(off: i64, len: i64):
+    %k = call ptr s_hk2()
+    %e = call i64 name_eq(off, len, %k)
+    %y = icmp.ne i64 %e, 0
+    condbr %y, r2(), n3(off, len)
+  r2():
+    ret 2
+  n3(off: i64, len: i64):
+    %k = call ptr s_hk3()
+    %e = call i64 name_eq(off, len, %k)
+    %y = icmp.ne i64 %e, 0
+    condbr %y, r3(), n4(off, len)
+  r3():
+    ret 3
+  n4(off: i64, len: i64):
+    %k = call ptr s_hk4()
+    %e = call i64 name_eq(off, len, %k)
+    %y = icmp.ne i64 %e, 0
+    condbr %y, r4(), n5(off, len)
+  r4():
+    ret 4
+  n5(off: i64, len: i64):
+    %k = call ptr s_hk5()
+    %e = call i64 name_eq(off, len, %k)
+    %y = icmp.ne i64 %e, 0
+    condbr %y, r5(), n6(off, len)
+  r5():
+    ret 5
+  n6(off: i64, len: i64):
+    %k = call ptr s_hk6()
+    %e = call i64 name_eq(off, len, %k)
+    %y = icmp.ne i64 %e, 0
+    condbr %y, r6(), r0()
+  r6():
+    ret 6
+  r0():
+    ret 0
+}
+
+; record the type in the type globals for value id v of the
+; current function (pass 2 only)
+fn set_vtype(i64) -> void {
+  entry(v: i64):
+    %lt = icmp.slt i64 v, 0
+    condbr %lt, fin(), go(v)
+  go(v: i64):
+    %A = call i64 ld64(45824)
+    %voa = add i64 %A, 128
+    %vo = call i64 mload(%voa)
+    %vto = call i64 ld64(46024)
+    %idx = add i64 %vto, v
+    %sh = shl i64 %idx, 4
+    %base = add i64 %A, %vo
+    %dst = add i64 %base, %sh
+    %k = call i64 ld64(45928)
+    call void mstore(%dst, %k)
+    %d8 = add i64 %dst, 8
+    %b = call i64 ld64(45936)
+    call void mstore(%d8, %b)
+    br fin()
+  fin():
+    ret
+}
+
+fn track_val(i64) -> void {
+  entry(v: i64):
+    %cur = call i64 ld64(46032)
+    %gt = icmp.sgt i64 v, %cur
+    condbr %gt, set(v), fin()
+  set(v: i64):
+    call void st64(46032, v)
+    br fin()
+  fin():
+    ret
+}
+
+; ---- instruction decode -------------------------------------------
+; Parsed fields land in the scratch record at arena 46160, using
+; the record layout. Argument lists land in the scratch at 46080.
+; Returns 0, or 3 for an unsupported op.
+
+fn insc(i64, i64) -> void {
+  entry(off: i64, v: i64):
+    %a = add i64 46160, off
+    call void mstore(%a, v)
+    ret
+}
+
+fn ing(i64) -> i64 {
+  entry(off: i64):
+    %a = add i64 46160, off
+    %v = call i64 mload(%a)
+    ret %v
+}
+
+; copy n argument values from the scratch to the pool (pass 2),
+; recording the pool index at the given scratch offset; the pool
+; index the list starts at was saved at 46240 by rd_args
+fn pool_args(i64, i64) -> void {
+  entry(n: i64, recoff: i64):
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, go(n, recoff), fin()
+  go(n: i64, recoff: i64):
+    %cp = call i64 ld64(46240)
+    call void insc(recoff, %cp)
+    br loop(n, %cp, 0)
+  loop(n: i64, cp: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(n, cp, i)
+  body(n: i64, cp: i64, i: i64):
+    %sh = shl i64 i, 3
+    %sa = add i64 46080, %sh
+    %v = call i64 mload(%sa)
+    %A = call i64 ld64(45824)
+    %poa = add i64 %A, 120
+    %po = call i64 mload(%poa)
+    %dst = add i64 %A, %po
+    %ix = add i64 cp, i
+    %ix8 = shl i64 %ix, 3
+    %dst2 = add i64 %dst, %ix8
+    call void mstore(%dst2, %v)
+    %i2 = add i64 i, 1
+    br loop(n, cp, %i2)
+  fin():
+    ret
+}
+
+; copy the scratch record into the instruction table (pass 2)
+fn store_ins() -> void {
+  entry():
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, go(), fin()
+  go():
+    %A = call i64 ld64(45824)
+    %ioa = add i64 %A, 112
+    %io = call i64 mload(%ioa)
+    %ci = call i64 ld64(45968)
+    %sh = shl i64 %ci, 7
+    %sh2 = shl i64 %ci, 4
+    %sh3 = add i64 %sh, %sh2
+    %dst = add i64 %A, %io
+    %dst2 = add i64 %dst, %sh3
+    br loop(%dst2, 0)
+  loop(dst: i64, i: i64):
+    %done = icmp.sge i64 i, 18
+    condbr %done, fin(), body(dst, i)
+  body(dst: i64, i: i64):
+    %sh = shl i64 i, 3
+    %sa = add i64 46160, %sh
+    %v = call i64 mload(%sa)
+    %da = add i64 dst, %sh
+    call void mstore(%da, %v)
+    %i2 = add i64 i, 1
+    br loop(dst, %i2)
+  fin():
+    ret
+}
+
+; count or store n argument values read from the stream
+fn rd_args(i64, i64) -> void {
+  entry(n: i64, recoff: i64):
+    %cp = call i64 ld64(45976)
+    call void st64(46240, %cp)
+    br loop(n, recoff, 0)
+  loop(n: i64, recoff: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(n, recoff), body(n, recoff, i)
+  body(n: i64, recoff: i64, i: i64):
+    %v = call i64 rval()
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, st(n, recoff, i, %v), cnt(n, recoff, i, %v)
+  st(n: i64, recoff: i64, i: i64, v: i64):
+    %sh = shl i64 i, 3
+    %sa = add i64 46080, %sh
+    call void mstore(%sa, v)
+    br next(n, recoff, i, v)
+  cnt(n: i64, recoff: i64, i: i64, v: i64):
+    br next(n, recoff, i, v)
+  next(n: i64, recoff: i64, i: i64, v: i64):
+    call void track_val(v)
+    %cp = call i64 ld64(45976)
+    %cp2 = add i64 %cp, 1
+    call void st64(45976, %cp2)
+    %i2 = add i64 i, 1
+    br loop(n, recoff, %i2)
+  fin(n: i64, recoff: i64):
+    call void pool_args(n, recoff)
+    ret
+}
+
+fn rd_instr() -> i64 {
+  entry():
+    %d1 = iconst i64 1
+    %d8 = iconst i64 8
+    %d3 = iconst i64 3
+    br zero(0)
+  zero(i: i64):
+    %done = icmp.sge i64 i, 18
+    condbr %done, head(), zb(i)
+  zb(i: i64):
+    %sh = shl i64 i, 3
+    %a = add i64 46160, %sh
+    call void mstore(%a, 0)
+    %i2 = add i64 i, 1
+    br zero(%i2)
+  head():
+    %e56 = iconst i64 56
+    %e72 = iconst i64 72
+    %e104 = iconst i64 104
+    %e112 = iconst i64 112
+    %e32 = iconst i64 32
+    %e40 = iconst i64 40
+    %e48 = iconst i64 48
+    %e64 = iconst i64 64
+    %e80 = iconst i64 80
+    %e88 = iconst i64 88
+    %e96 = iconst i64 96
+    %e120 = iconst i64 120
+    %e128 = iconst i64 128
+    %e136 = iconst i64 136
+    %op = call i64 rd8()
+    call void insc(0, %op)
+    %res = call i64 rval()
+    call void insc(8, %res)
+    call void track_val(%res)
+    call void rdtype()
+    %k = call i64 ld64(45928)
+    call void insc(16, %k)
+    %b = call i64 ld64(45936)
+    call void insc(24, %b)
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, svt(%res), disp(%op)
+  svt(res: i64):
+    call void set_vtype(res)
+    br disp2()
+  disp2():
+    %op = call i64 ing(0)
+    br disp(%op)
+  disp(op: i64):
+    %c1 = icmp.eq i64 op, 1
+    condbr %c1, k_imm_s(), c2(op)
+  k_imm_s():
+    %v = call i64 rsleb()
+    call void insc(56, %v)
+    br fin()
+  c2(op: i64):
+    %c = icmp.eq i64 op, 2
+    condbr %c, k_imm_u(), c3(op)
+  k_imm_u():
+    %v = call i64 ruleb()
+    call void insc(56, %v)
+    br fin()
+  c3(op: i64):
+    %c = icmp.eq i64 op, 68
+    condbr %c, k_br(), c4(op)
+  k_br():
+    %t = call i64 ruleb()
+    call void insc(72, %t)
+    %n = call i64 ruleb()
+    call void insc(104, %n)
+    call void rd_args(%n, 112)
+    br fin()
+  c4(op: i64):
+    %c = icmp.eq i64 op, 69
+    condbr %c, k_cbr(), c5(op)
+  k_cbr():
+    %a = call i64 rval()
+    call void insc(32, %a)
+    call void track_val(%a)
+    %t = call i64 ruleb()
+    call void insc(72, %t)
+    %n = call i64 ruleb()
+    call void insc(104, %n)
+    call void rd_args(%n, 112)
+    %t2 = call i64 ruleb()
+    call void insc(80, %t2)
+    %n2 = call i64 ruleb()
+    call void insc(120, %n2)
+    call void rd_args(%n2, 128)
+    br fin()
+  c5(op: i64):
+    %lo = icmp.sge i64 op, 71
+    %hi = icmp.sle i64 op, 72
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, k_call(), c6(op)
+  k_call():
+    %ce = call i64 ruleb()
+    call void insc(88, %ce)
+    %cx = call i64 rd8()
+    call void insc(96, %cx)
+    %n = call i64 ruleb()
+    call void insc(104, %n)
+    call void rd_args(%n, 112)
+    br fin()
+  c6(op: i64):
+    %c = icmp.eq i64 op, 70
+    condbr %c, k_ret(), c7(op)
+  k_ret():
+    %a = call i64 rval()
+    call void insc(32, %a)
+    call void track_val(%a)
+    br fin()
+  c7(op: i64):
+    %a1 = icmp.eq i64 op, 19
+    %a2 = icmp.eq i64 op, 34
+    %z1 = zext i64 %a1
+    %z2 = zext i64 %a2
+    %x = or i64 %z1, %z2
+    %is = icmp.ne i64 %x, 0
+    condbr %is, k_cmp(), c8(op)
+  k_cmp():
+    %pr = call i64 rd8()
+    call void insc(64, %pr)
+    %a = call i64 rval()
+    call void insc(32, %a)
+    call void track_val(%a)
+    %b = call i64 rval()
+    call void insc(40, %b)
+    call void track_val(%b)
+    br fin()
+  c8(op: i64):
+    %c = icmp.eq i64 op, 42
+    condbr %c, k_alloca(), c9(op)
+  k_alloca():
+    %v = call i64 ruleb()
+    call void insc(56, %v)
+    %w = call i64 ruleb()
+    call void insc(48, %w)
+    br fin()
+  c9(op: i64):
+    %c = icmp.eq i64 op, 48
+    condbr %c, k_dataptr(), c10(op)
+  k_dataptr():
+    %v = call i64 ruleb()
+    call void insc(56, %v)
+    br fin()
+  c10(op: i64):
+    %c = icmp.eq i64 op, 45
+    condbr %c, k_gep(), c11(op)
+  k_gep():
+    %a = call i64 rval()
+    call void insc(32, %a)
+    call void track_val(%a)
+    %b = call i64 rval()
+    call void insc(40, %b)
+    call void track_val(%b)
+    call void rdtype()
+    %sz = call i64 rdtsz()
+    call void insc(136, %sz)
+    br fin()
+  c11(op: i64):
+    %lo = icmp.sge i64 op, 49
+    %hi = icmp.sle i64 op, 64
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, k_vec(op), c12(op)
+  k_vec(op: i64):
+    %a = call i64 rval()
+    %is63 = icmp.eq i64 op, 63
+    condbr %is63, vx(), v3()
+  vx():
+    %w = call i64 ruleb()
+    ret 3
+  v3():
+    %b = call i64 rval()
+    %w = call i64 rval()
+    ret 3
+  c12(op: i64):
+    %lo = icmp.sge i64 op, 65
+    %hi = icmp.sle i64 op, 67
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, k_atom(op), k_gen()
+  k_atom(op: i64):
+    %aux = call i64 rd8()
+    %a = call i64 rval()
+    %is65 = icmp.eq i64 op, 65
+    condbr %is65, a1(), a2()
+  a1():
+    ret 3
+  a2():
+    %b = call i64 rval()
+    ret 3
+  k_gen():
+    %a = call i64 rval()
+    call void insc(32, %a)
+    call void track_val(%a)
+    %b = call i64 rval()
+    call void insc(40, %b)
+    call void track_val(%b)
+    %w = call i64 rval()
+    call void insc(48, %w)
+    call void track_val(%w)
+    br fin()
+  fin():
+    call void store_ins()
+    %ci = call i64 ld64(45968)
+    %ci2 = add i64 %ci, 1
+    call void st64(45968, %ci2)
+    ret 0
+}
+
+; ---- section walks --------------------------------------------------
+
+fn walk_exts() -> void {
+  entry():
+    %e1 = iconst i64 1
+    %e46000 = iconst i64 46000
+    %n = call i64 ruleb()
+    br loop(%n, 0)
+  loop(n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(n, i)
+  body(n: i64, i: i64):
+    call void rdname()
+    %off = call i64 ld64(45912)
+    %len = call i64 ld64(45920)
+    %np = call i64 ruleb()
+    br ploop(n, i, %off, %len, %np, 0)
+  ploop(n: i64, i: i64, off: i64, len: i64, np: i64, j: i64):
+    %done = icmp.sge i64 j, np
+    condbr %done, ret(n, i, off, len, np), pbody(n, i, off, len, np, j)
+  pbody(n: i64, i: i64, off: i64, len: i64, np: i64, j: i64):
+    call void rdtype()
+    %j2 = add i64 j, 1
+    br ploop(n, i, off, len, np, %j2)
+  ret(n: i64, i: i64, off: i64, len: i64, np: i64):
+    call void rdtype()
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, fill(n, i, off, len, np), next(n, i)
+  fill(n: i64, i: i64, off: i64, len: i64, np: i64):
+    %A = call i64 ld64(45824)
+    %xoa = add i64 %A, 136
+    %xo = call i64 mload(%xoa)
+    %ce = call i64 ld64(46000)
+    %sh = shl i64 %ce, 5
+    %rec = add i64 %A, %xo
+    %rec2 = add i64 %rec, %sh
+    call void mstore(%rec2, off)
+    %r8 = add i64 %rec2, 8
+    call void mstore(%r8, len)
+    %hid = call i64 host_id(off, len)
+    %r16 = add i64 %rec2, 16
+    call void mstore(%r16, %hid)
+    %r24 = add i64 %rec2, 24
+    call void mstore(%r24, np)
+    br next(n, i)
+  next(n: i64, i: i64):
+    %ce = call i64 ld64(46000)
+    %ce2 = add i64 %ce, 1
+    call void st64(46000, %ce2)
+    %i2 = add i64 i, 1
+    br loop(n, %i2)
+  fin():
+    ret
+}
+
+fn copy_bytes(i64, i64, i64) -> void {
+  entry(dst: i64, src: i64, n: i64):
+    br loop(dst, src, n, 0)
+  loop(dst: i64, src: i64, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(dst, src, n, i)
+  body(dst: i64, src: i64, n: i64, i: i64):
+    %sa = add i64 src, i
+    %v = call i64 mload8(%sa)
+    %da = add i64 dst, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br loop(dst, src, n, %i2)
+  fin():
+    ret
+}
+
+fn walk_data() -> void {
+  entry():
+    %e46008 = iconst i64 46008
+    %e45896 = iconst i64 45896
+    %e45992 = iconst i64 45992
+    %e1 = iconst i64 1
+    %n = call i64 ruleb()
+    br loop(%n, 0)
+  loop(n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(n, i)
+  body(n: i64, i: i64):
+    call void rdname()
+    %al = call i64 ruleb()
+    %len = call i64 ruleb()
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, fill(n, i, %len), skip(n, i, %len)
+  fill(n: i64, i: i64, len: i64):
+    %cur = call i64 ld64(45896)
+    %B = call i64 ld64(45832)
+    %cb = call i64 ld64(45992)
+    %dst = add i64 %B, %cb
+    call void copy_bytes(%dst, %cur, len)
+    %A = call i64 ld64(45824)
+    %doa = add i64 %A, 144
+    %do = call i64 mload(%doa)
+    %cd = call i64 ld64(46008)
+    %sh = shl i64 %cd, 4
+    %rec = add i64 %A, %do
+    %rec2 = add i64 %rec, %sh
+    call void mstore(%rec2, %cb)
+    %r8 = add i64 %rec2, 8
+    call void mstore(%r8, len)
+    br skip(n, i, len)
+  skip(n: i64, i: i64, len: i64):
+    %cd = call i64 ld64(46008)
+    %cd2 = add i64 %cd, 1
+    call void st64(46008, %cd2)
+    %cur = call i64 ld64(45896)
+    %cur2 = add i64 %cur, len
+    call void st64(45896, %cur2)
+    %cb = call i64 ld64(45992)
+    %a15 = add i64 len, 15
+    %al16 = and i64 %a15, -16
+    %cb2 = add i64 %cb, %al16
+    call void st64(45992, %cb2)
+    %i2 = add i64 i, 1
+    br loop(n, %i2)
+  fin():
+    ret
+}
+
+fn walk_funcs() -> i64 {
+  entry():
+    %e45824 = iconst i64 45824
+    %e45952 = iconst i64 45952
+    %e45960 = iconst i64 45960
+    %e45968 = iconst i64 45968
+    %e45976 = iconst i64 45976
+    %e45984 = iconst i64 45984
+    %e1 = iconst i64 1
+    %e46248 = iconst i64 46248
+    %e46256 = iconst i64 46256
+    %e16 = iconst i64 16
+    %e8 = iconst i64 8
+    %e24 = iconst i64 24
+    %e32 = iconst i64 32
+    %n = call i64 ruleb()
+    br loop(%n, 0)
+  loop(n: i64, f: i64):
+    %done = icmp.sge i64 f, n
+    condbr %done, ok(), body(n, f)
+  body(n: i64, f: i64):
+    call void rdname()
+    %off = call i64 ld64(45912)
+    %len = call i64 ld64(45920)
+    call void st64(46208, %off)
+    call void st64(46216, %len)
+    %fl = call i64 rd8()
+    call void rdtype()
+    %rk = call i64 ld64(45928)
+    %rb = call i64 ld64(45936)
+    call void st64(46224, %rk)
+    call void st64(46232, %rb)
+    call void st64(46016, f)
+    call void st64(46032, -1)
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, ffill(n, f), blocks(n, f)
+  ffill(n: i64, f: i64):
+    %A = call i64 ld64(45824)
+    %cf = call i64 ld64(45952)
+    %sh = shl i64 %cf, 6
+    %rec = add i64 %A, 4096
+    %rec2 = add i64 %rec, %sh
+    call void st64(46256, %rec2)
+    %off = call i64 ld64(46208)
+    call void mstore(%rec2, %off)
+    %len = call i64 ld64(46216)
+    %r8 = add i64 %rec2, 8
+    call void mstore(%r8, %len)
+    %rk = call i64 ld64(46224)
+    %r16 = add i64 %rec2, 16
+    call void mstore(%r16, %rk)
+    %rb = call i64 ld64(46232)
+    %r24 = add i64 %rec2, 24
+    call void mstore(%r24, %rb)
+    %cb = call i64 ld64(45960)
+    %r32 = add i64 %rec2, 32
+    call void mstore(%r32, %cb)
+    %vt = call i64 ld64(45984)
+    call void st64(46024, %vt)
+    %r56 = add i64 %rec2, 56
+    call void mstore(%r56, %vt)
+    %mn = call ptr s_hmain()
+    %off2 = call i64 ld64(46208)
+    %len2 = call i64 ld64(46216)
+    %e = call i64 name_eq(%off2, %len2, %mn)
+    %is = icmp.ne i64 %e, 0
+    condbr %is, setmain(n, f), blocks(n, f)
+  setmain(n: i64, f: i64):
+    %A = call i64 ld64(45824)
+    %ma = add i64 %A, 64
+    call void mstore(%ma, f)
+    br blocks(n, f)
+  blocks(n: i64, f: i64):
+    %nb = call i64 ruleb()
+    br bloop(n, f, %nb, 0)
+  bloop(n: i64, f: i64, nb: i64, b: i64):
+    %done = icmp.sge i64 b, nb
+    condbr %done, fdone(n, f, nb), bbody(n, f, nb, b)
+  bbody(n: i64, f: i64, nb: i64, b: i64):
+    %na = call i64 ruleb()
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, bfill(n, f, nb, b, %na), args(n, f, nb, b, %na, 0)
+  bfill(n: i64, f: i64, nb: i64, b: i64, na: i64):
+    %A = call i64 ld64(45824)
+    %boa = add i64 %A, 104
+    %bo = call i64 mload(%boa)
+    %cb = call i64 ld64(45960)
+    %sh = shl i64 %cb, 5
+    %sh2 = shl i64 %cb, 4
+    %sh3 = add i64 %sh, %sh2
+    %rec = add i64 %A, %bo
+    %rec2 = add i64 %rec, %sh3
+    call void st64(46248, %rec2)
+    call void mstore(%rec2, f)
+    %r8 = add i64 %rec2, 8
+    call void mstore(%r8, na)
+    %cp = call i64 ld64(45976)
+    %r16 = add i64 %rec2, 16
+    call void mstore(%r16, %cp)
+    %ci = call i64 ld64(45968)
+    %r24 = add i64 %rec2, 24
+    call void mstore(%r24, %ci)
+    br args(n, f, nb, b, na, 0)
+  args(n: i64, f: i64, nb: i64, b: i64, na: i64, k: i64):
+    %done = icmp.sge i64 k, na
+    condbr %done, instrs(n, f, nb, b), abody(n, f, nb, b, na, k)
+  abody(n: i64, f: i64, nb: i64, b: i64, na: i64, k: i64):
+    %vid = call i64 ruleb()
+    call void rdtype()
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, ast(n, f, nb, b, na, k, %vid), anext(n, f, nb, b, na, k, %vid)
+  ast(n: i64, f: i64, nb: i64, b: i64, na: i64, k: i64, vid: i64):
+    %A = call i64 ld64(45824)
+    %poa = add i64 %A, 120
+    %po = call i64 mload(%poa)
+    %cp = call i64 ld64(45976)
+    %sh = shl i64 %cp, 3
+    %dst = add i64 %A, %po
+    %dst2 = add i64 %dst, %sh
+    call void mstore(%dst2, vid)
+    call void set_vtype(vid)
+    br anext(n, f, nb, b, na, k, vid)
+  anext(n: i64, f: i64, nb: i64, b: i64, na: i64, k: i64, vid: i64):
+    call void track_val(vid)
+    %cp = call i64 ld64(45976)
+    %cp2 = add i64 %cp, 1
+    call void st64(45976, %cp2)
+    %k2 = add i64 k, 1
+    br args(n, f, nb, b, na, %k2)
+  instrs(n: i64, f: i64, nb: i64, b: i64):
+    %ni = call i64 ruleb()
+    br iloop(n, f, nb, b, %ni, 0)
+  iloop(n: i64, f: i64, nb: i64, b: i64, ni: i64, j: i64):
+    %done = icmp.sge i64 j, ni
+    condbr %done, bdone(n, f, nb, b, ni), ibody(n, f, nb, b, ni, j)
+  ibody(n: i64, f: i64, nb: i64, b: i64, ni: i64, j: i64):
+    %fl = call i64 rd_instr()
+    %bad = icmp.ne i64 %fl, 0
+    condbr %bad, ffail(%fl), inext(n, f, nb, b, ni, j)
+  inext(n: i64, f: i64, nb: i64, b: i64, ni: i64, j: i64):
+    %j2 = add i64 j, 1
+    br iloop(n, f, nb, b, ni, %j2)
+  bdone(n: i64, f: i64, nb: i64, b: i64, ni: i64):
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, bstore(n, f, nb, b, ni), bnext(n, f, nb, b)
+  bstore(n: i64, f: i64, nb: i64, b: i64, ni: i64):
+    %rec = call i64 ld64(46248)
+    %r32 = add i64 %rec, 32
+    call void mstore(%r32, ni)
+    br bnext(n, f, nb, b)
+  bnext(n: i64, f: i64, nb: i64, b: i64):
+    %cb = call i64 ld64(45960)
+    %cb2 = add i64 %cb, 1
+    call void st64(45960, %cb2)
+    %b2 = add i64 b, 1
+    br bloop(n, f, nb, %b2)
+  fdone(n: i64, f: i64, nb: i64):
+    %mv = call i64 ld64(46032)
+    %nv = add i64 %mv, 1
+    %vt = call i64 ld64(45984)
+    %vt2 = add i64 %vt, %nv
+    call void st64(45984, %vt2)
+    %pass = call i64 ld64(46040)
+    %p2 = icmp.eq i64 %pass, 2
+    condbr %p2, fstore(n, f, nb, %nv), fnext(n, f)
+  fstore(n: i64, f: i64, nb: i64, nv: i64):
+    %rec = call i64 ld64(46256)
+    %r40 = add i64 %rec, 40
+    call void mstore(%r40, nb)
+    %r48 = add i64 %rec, 48
+    call void mstore(%r48, nv)
+    br fnext(n, f)
+  fnext(n: i64, f: i64):
+    %cf = call i64 ld64(45952)
+    %cf2 = add i64 %cf, 1
+    call void st64(45952, %cf2)
+    %f2 = add i64 f, 1
+    br loop(n, %f2)
+  ffail(fl: i64):
+    ret fl
+  ok():
+    ret 0
+}
+
+fn walk_mod() -> i64 {
+  entry():
+    %e1 = iconst i64 1
+    %e2 = iconst i64 2
+    %e0 = iconst i64 0
+    %b0 = call i64 rd8()
+    %e0 = icmp.eq i64 %b0, 75
+    condbr %e0, m1(), bad1()
+  bad1():
+    ret 1
+  m1():
+    %b1 = call i64 rd8()
+    %e1 = icmp.eq i64 %b1, 82
+    condbr %e1, m2(), bad1()
+  m2():
+    %b2 = call i64 rd8()
+    %e2 = icmp.eq i64 %b2, 69
+    condbr %e2, m3(), bad1()
+  m3():
+    %b3 = call i64 rd8()
+    %e3 = icmp.eq i64 %b3, 76
+    condbr %e3, ver(), bad1()
+  ver():
+    %lo = call i64 rd8()
+    %hi = call i64 rd8()
+    %h8 = shl i64 %hi, 8
+    %v = or i64 %lo, %h8
+    %ok = icmp.eq i64 %v, 1
+    condbr %ok, secs(), bad2()
+  bad2():
+    ret 2
+  secs():
+    %cur = call i64 ld64(45896)
+    %end = call i64 ld64(45904)
+    %more = icmp.slt i64 %cur, %end
+    condbr %more, sec(), ok()
+  sec():
+    %id = call i64 rd8()
+    %len = call i64 ruleb()
+    %cur = call i64 ld64(45896)
+    %send = add i64 %cur, %len
+    call void st64(46264, %send)
+    %i2 = icmp.eq i64 %id, 2
+    condbr %i2, sx(), s3(%id)
+  sx():
+    call void walk_exts()
+    br jump()
+  s3(id: i64):
+    %i3 = icmp.eq i64 id, 3
+    condbr %i3, sd(), s4(id)
+  sd():
+    call void walk_data()
+    br jump()
+  s4(id: i64):
+    %i4 = icmp.eq i64 id, 4
+    condbr %i4, sf(), jump()
+  sf():
+    %fl = call i64 walk_funcs()
+    %bad = icmp.ne i64 %fl, 0
+    condbr %bad, ff(%fl), jump()
+  ff(fl: i64):
+    ret fl
+  jump():
+    %send = call i64 ld64(46264)
+    call void st64(45896, %send)
+    br secs()
+  ok():
+    ret 0
+}
+
+; compute the A layout from the pass-1 cursors and write the
+; A header; the A size lands at 46312
+fn run_layout() -> void {
+  entry():
+    %A = call i64 ld64(45824)
+    %nf = call i64 ld64(45952)
+    call void mstore(%A, %nf)
+    %nb = call i64 ld64(45960)
+    %a8 = add i64 %A, 8
+    call void mstore(%a8, %nb)
+    %ni = call i64 ld64(45968)
+    %a16 = add i64 %A, 16
+    call void mstore(%a16, %ni)
+    %pn = call i64 ld64(45976)
+    %a24 = add i64 %A, 24
+    call void mstore(%a24, %pn)
+    %ne = call i64 ld64(46000)
+    %a32 = add i64 %A, 32
+    call void mstore(%a32, %ne)
+    %nd = call i64 ld64(46008)
+    %a40 = add i64 %A, 40
+    call void mstore(%a40, %nd)
+    %bb = call i64 ld64(45992)
+    %a48 = add i64 %A, 48
+    call void mstore(%a48, %bb)
+    %tv = call i64 ld64(45984)
+    %a56 = add i64 %A, 56
+    call void mstore(%a56, %tv)
+    %a64 = add i64 %A, 64
+    call void mstore(%a64, -1)
+    %a72 = add i64 %A, 72
+    call void mstore(%a72, %bb)
+    %sh = shl i64 %nf, 6
+    %bo = add i64 4096, %sh
+    %a104 = add i64 %A, 104
+    call void mstore(%a104, %bo)
+    %sh2 = shl i64 %nb, 5
+    %sh3 = shl i64 %nb, 4
+    %io = add i64 %bo, %sh2
+    %io2 = add i64 %io, %sh3
+    %a112 = add i64 %A, 112
+    call void mstore(%a112, %io2)
+    %sh4 = shl i64 %ni, 7
+    %sh5 = shl i64 %ni, 4
+    %po = add i64 %io2, %sh4
+    %po2 = add i64 %po, %sh5
+    %a120 = add i64 %A, 120
+    call void mstore(%a120, %po2)
+    %sh6 = shl i64 %pn, 3
+    %vo = add i64 %po2, %sh6
+    %a128 = add i64 %A, 128
+    call void mstore(%a128, %vo)
+    %sh7 = shl i64 %tv, 4
+    %xo = add i64 %vo, %sh7
+    %a136 = add i64 %A, 136
+    call void mstore(%a136, %xo)
+    %sh8 = shl i64 %ne, 5
+    %do = add i64 %xo, %sh8
+    %a144 = add i64 %A, 144
+    call void mstore(%a144, %do)
+    %sh9 = shl i64 %nd, 4
+    %te = add i64 %do, %sh9
+    %te2 = add i64 %te, 4095
+    %fo = and i64 %te2, -4096
+    %a80 = add i64 %A, 80
+    call void mstore(%a80, %fo)
+    %vo2 = add i64 %fo, 32768
+    %a88 = add i64 %A, 88
+    call void mstore(%a88, %vo2)
+    %asz = add i64 %vo2, 65536
+    %a152 = add i64 %A, 152
+    call void mstore(%a152, %asz)
+    call void st64(46312, %asz)
+    ret
+}
+
+fn zero_cursors() -> void {
+  entry():
+    br loop(0)
+  loop(i: i64):
+    %done = icmp.sge i64 i, 8
+    condbr %done, fin(), body(i)
+  body(i: i64):
+    %sh = shl i64 i, 3
+    %a = add i64 45952, %sh
+    call void st64(%a, 0)
+    %i2 = add i64 i, 1
+    br loop(%i2)
+  fin():
+    ret
+}
+
+fn mzero(i64, i64) -> void {
+  entry(a: i64, n: i64):
+    br loop(a, n, 0)
+  loop(a: i64, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(a, n, i)
+  body(a: i64, n: i64, i: i64):
+    %d = add i64 a, i
+    call void mstore8(%d, 0)
+    %i2 = add i64 i, 1
+    br loop(a, n, %i2)
+  fin():
+    ret
+}
+
+; load and run module idx; status lands at 45848, code at 45856
+fn run_module(i64) -> void {
+  entry(idx: i64):
+    %e2 = iconst i64 2
+    %e45848 = iconst i64 45848
+    %e45856 = iconst i64 45856
+    %toff = mul i64 idx, 32
+    %tp = add i64 45384, %toff
+    %addr = call i64 mload(%tp)
+    %szp = add i64 %tp, 8
+    %size = call i64 mload(%szp)
+    call void st64(45888, %addr)
+    %end = add i64 %addr, %size
+    call void st64(45904, %end)
+    call void zero_cursors()
+    call void st64(46040, 1)
+    call void st64(45896, %addr)
+    %fl = call i64 walk_mod()
+    %bad = icmp.ne i64 %fl, 0
+    condbr %bad, fault(%fl), sized()
+  sized():
+    call void run_layout_pre()
+    %asz = call i64 ld64(46312)
+    %A = call i64 kmalloc(%asz)
+    %B = call i64 kmalloc(262144)
+    call void st64(45824, %A)
+    call void st64(45832, %B)
+    %no = icmp.eq i64 %A, 0
+    %no2 = icmp.eq i64 %B, 0
+    %nz = zext i64 %no
+    %nz2 = zext i64 %no2
+    %either = or i64 %nz, %nz2
+    %oom = icmp.ne i64 %either, 0
+    condbr %oom, fault(95), lay(%A, %B)
+  lay(A: i64, B: i64):
+    call void run_layout()
+    %tv = call i64 ld64(45984)
+    %sh = shl i64 %tv, 4
+    %voa = add i64 A, 128
+    %vo = call i64 mload(%voa)
+    %vaddr = add i64 A, %vo
+    call void mzero(%vaddr, %sh)
+    call void zero_cursors()
+    call void st64(46040, 2)
+    %addr = call i64 ld64(45888)
+    call void st64(45896, %addr)
+    %fl = call i64 walk_mod()
+    %bad = icmp.ne i64 %fl, 0
+    condbr %bad, fault2(%fl, A, B), extchk(A, B)
+  extchk(A: i64, B: i64):
+    %ne = call i64 mload(A)
+    %ne2 = call i64 ld64(46000)
+    br xloop(A, B, %ne2, 0)
+  xloop(A: i64, B: i64, ne: i64, i: i64):
+    %done = icmp.sge i64 i, ne
+    condbr %done, mainchk(A, B), xbody(A, B, ne, i)
+  xbody(A: i64, B: i64, ne: i64, i: i64):
+    %xoa = add i64 A, 136
+    %xo = call i64 mload(%xoa)
+    %sh = shl i64 i, 5
+    %rec = add i64 A, %xo
+    %rec2 = add i64 %rec, %sh
+    %h16 = add i64 %rec2, 16
+    %hid = call i64 mload(%h16)
+    %no = icmp.eq i64 %hid, 0
+    condbr %no, fault2(93, A, B), xnext(A, B, ne, i)
+  xnext(A: i64, B: i64, ne: i64, i: i64):
+    %i2 = add i64 i, 1
+    br xloop(A, B, ne, %i2)
+  mainchk(A: i64, B: i64):
+    %mna = add i64 A, 64
+    %mn = call i64 mload(%mna)
+    %no = icmp.slt i64 %mn, 0
+    condbr %no, fault2(4, A, B), go(A, B)
+  go(A: i64, B: i64):
+    call void mod_exec()
+    %A2 = call i64 ld64(45824)
+    %B2 = call i64 ld64(45832)
+    call void kfree(%A2)
+    call void kfree(%B2)
+    ret
+  fault(fl: i64):
+    call void st64(45848, 2)
+    call void st64(45856, fl)
+    ret
+  fault2(fl: i64, A: i64, B: i64):
+    call void kfree(A)
+    call void kfree(B)
+    call void st64(45848, 2)
+    call void st64(45856, fl)
+    ret
+}
+
+; A-size-only pass over the pass-1 cursors (no A exists yet)
+fn run_layout_pre() -> void {
+  entry():
+    %nf = call i64 ld64(45952)
+    %nb = call i64 ld64(45960)
+    %ni = call i64 ld64(45968)
+    %pn = call i64 ld64(45976)
+    %ne = call i64 ld64(46000)
+    %nd = call i64 ld64(46008)
+    %tv = call i64 ld64(45984)
+    %sh = shl i64 %nf, 6
+    %bo = add i64 4096, %sh
+    %sh2 = shl i64 %nb, 5
+    %sh3 = shl i64 %nb, 4
+    %io = add i64 %bo, %sh2
+    %io2 = add i64 %io, %sh3
+    %sh4 = shl i64 %ni, 7
+    %sh5 = shl i64 %ni, 4
+    %po = add i64 %io2, %sh4
+    %po2 = add i64 %po, %sh5
+    %sh6 = shl i64 %pn, 3
+    %vo = add i64 %po2, %sh6
+    %sh7 = shl i64 %tv, 4
+    %xo = add i64 %vo, %sh7
+    %sh8 = shl i64 %ne, 5
+    %do = add i64 %xo, %sh8
+    %sh9 = shl i64 %nd, 4
+    %te = add i64 %do, %sh9
+    %te2 = add i64 %te, 4095
+    %fo = and i64 %te2, -4096
+    %vo2 = add i64 %fo, 32768
+    %asz = add i64 %vo2, 65536
+    call void st64(46312, %asz)
+    ret
+}
+
+; ---- execution ------------------------------------------------------
+
+fn fra() -> i64 {
+  entry():
+    %A = call i64 ld64(45824)
+    %t = call i64 ld64(45864)
+    %r = add i64 %A, %t
+    ret %r
+}
+
+fn fld(i64) -> i64 {
+  entry(off: i64):
+    %f = call i64 fra()
+    %a = add i64 %f, off
+    %v = call i64 mload(%a)
+    ret %v
+}
+
+fn fst(i64, i64) -> void {
+  entry(off: i64, v: i64):
+    %f = call i64 fra()
+    %a = add i64 %f, off
+    call void mstore(%a, v)
+    ret
+}
+
+fn ira(i64) -> i64 {
+  entry(off: i64):
+    %r = call i64 ld64(45944)
+    %a = add i64 %r, off
+    %v = call i64 mload(%a)
+    ret %v
+}
+
+fn vg(i64) -> i64 {
+  entry(vid: i64):
+    %A = call i64 ld64(45824)
+    %vb = call i64 fld(24)
+    %base = add i64 %A, %vb
+    %sh = shl i64 vid, 3
+    %a = add i64 %base, %sh
+    %v = call i64 mload(%a)
+    ret %v
+}
+
+fn vs(i64, i64) -> void {
+  entry(vid: i64, v: i64):
+    %A = call i64 ld64(45824)
+    %vb = call i64 fld(24)
+    %base = add i64 %A, %vb
+    %sh = shl i64 vid, 3
+    %a = add i64 %base, %sh
+    call void mstore(%a, v)
+    ret
+}
+
+; type of a value of the current function: kind at 46328, bits at 46336
+fn vtyp(i64) -> void {
+  entry(vid: i64):
+    %A = call i64 ld64(45824)
+    %fn = call i64 fld(0)
+    %sh = shl i64 %fn, 6
+    %rec = add i64 %A, 4096
+    %rec2 = add i64 %rec, %sh
+    %o56 = add i64 %rec2, 56
+    %vto = call i64 mload(%o56)
+    %idx = add i64 %vto, vid
+    %voa = add i64 %A, 128
+    %vo = call i64 mload(%voa)
+    %sh2 = shl i64 %idx, 4
+    %base = add i64 %A, %vo
+    %a = add i64 %base, %sh2
+    %k = call i64 mload(%a)
+    call void st64(46328, %k)
+    %a8 = add i64 %a, 8
+    %b = call i64 mload(%a8)
+    call void st64(46336, %b)
+    ret
+}
+
+fn maskw(i64, i64) -> i64 {
+  entry(v: i64, bits: i64):
+    %full = icmp.sge i64 bits, 64
+    condbr %full, id(v), go(v, bits)
+  id(v: i64):
+    ret v
+  go(v: i64, bits: i64):
+    %one = iconst i64 1
+    %m = shl i64 %one, bits
+    %m2 = sub i64 %m, 1
+    %r = and i64 v, %m2
+    ret %r
+}
+
+fn sxtw(i64, i64) -> i64 {
+  entry(v: i64, bits: i64):
+    %full = icmp.sge i64 bits, 64
+    condbr %full, id(v), go(v, bits)
+  id(v: i64):
+    ret v
+  go(v: i64, bits: i64):
+    %sh = sub i64 64, bits
+    %a = shl i64 v, %sh
+    %r = ashr i64 %a, %sh
+    ret %r
+}
+
+fn set_res(i64) -> void {
+  entry(v: i64):
+    %res = call i64 ira(8)
+    %neg = icmp.slt i64 %res, 0
+    condbr %neg, fin(), go(%res, v)
+  go(res: i64, v: i64):
+    %k = call i64 ira(16)
+    %is3 = icmp.eq i64 %k, 3
+    condbr %is3, raw(res, v), mask(res, v)
+  raw(res: i64, v: i64):
+    call void vs(res, v)
+    br fin()
+  mask(res: i64, v: i64):
+    %b = call i64 ira(24)
+    %m = call i64 maskw(v, %b)
+    call void vs(res, %m)
+    br fin()
+  fin():
+    ret
+}
+
+fn adv_pc() -> void {
+  entry():
+    %pc = call i64 fld(16)
+    %pc2 = add i64 %pc, 1
+    call void fst(16, %pc2)
+    ret
+}
+
+fn fault(i64) -> void {
+  entry(code: i64):
+    call void st64(45848, 2)
+    call void st64(45856, code)
+    ret
+}
+
+fn poolv(i64) -> i64 {
+  entry(ix: i64):
+    %A = call i64 ld64(45824)
+    %poa = add i64 %A, 120
+    %po = call i64 mload(%poa)
+    %sh = shl i64 ix, 3
+    %a = add i64 %A, %po
+    %a2 = add i64 %a, %sh
+    %v = call i64 mload(%a2)
+    ret %v
+}
+
+fn blkrec(i64) -> i64 {
+  entry(b: i64):
+    %A = call i64 ld64(45824)
+    %boa = add i64 %A, 104
+    %bo = call i64 mload(%boa)
+    %s1 = shl i64 b, 5
+    %s2 = shl i64 b, 4
+    %off = add i64 %s1, %s2
+    %r = add i64 %A, %bo
+    %r2 = add i64 %r, %off
+    ret %r2
+}
+
+fn funrec(i64) -> i64 {
+  entry(f: i64):
+    %A = call i64 ld64(45824)
+    %sh = shl i64 f, 6
+    %r = add i64 %A, 4096
+    %r2 = add i64 %r, %sh
+    ret %r2
+}
+
+; ---- integer ops ------------------------------------------------------
+
+fn popc_w(i64, i64) -> i64 {
+  entry(v: i64, bits: i64):
+    %x = call i64 maskw(v, bits)
+    br loop(%x, 0)
+  loop(x: i64, acc: i64):
+    %no = icmp.eq i64 x, 0
+    condbr %no, fin(acc), body(x, acc)
+  body(x: i64, acc: i64):
+    %b = and i64 x, 1
+    %a2 = add i64 acc, %b
+    %x2 = lshr i64 x, 1
+    br loop(%x2, %a2)
+  fin(acc: i64):
+    ret acc
+}
+
+fn clz_w(i64, i64) -> i64 {
+  entry(v: i64, bits: i64):
+    %x = call i64 maskw(v, bits)
+    br loop(%x, bits, 0)
+  loop(x: i64, bits: i64, acc: i64):
+    %sh = sub i64 bits, 1
+    %top = shl i64 1, %sh
+    %hit = and i64 x, %top
+    %is = icmp.ne i64 %hit, 0
+    condbr %is, fin(acc), next(x, bits, acc)
+  next(x: i64, bits: i64, acc: i64):
+    %a2 = add i64 acc, 1
+    %over = icmp.sge i64 %a2, bits
+    condbr %over, fin(%a2), more(x, bits, %a2)
+  more(x: i64, bits: i64, acc: i64):
+    %x2 = shl i64 x, 1
+    br loop(%x2, bits, acc)
+  fin(acc: i64):
+    ret acc
+}
+
+fn ctz_w(i64, i64) -> i64 {
+  entry(v: i64, bits: i64):
+    %x = call i64 maskw(v, bits)
+    br loop(%x, bits, 0)
+  loop(x: i64, bits: i64, acc: i64):
+    %b = and i64 x, 1
+    %is = icmp.ne i64 %b, 0
+    condbr %is, fin(acc), next(x, bits, acc)
+  next(x: i64, bits: i64, acc: i64):
+    %a2 = add i64 acc, 1
+    %over = icmp.sge i64 %a2, bits
+    condbr %over, fin(%a2), more(x, bits, %a2)
+  more(x: i64, bits: i64, acc: i64):
+    %x2 = lshr i64 x, 1
+    br loop(%x2, bits, acc)
+  fin(acc: i64):
+    ret acc
+}
+
+fn bswap_w(i64, i64) -> i64 {
+  entry(v: i64, bits: i64):
+    %nb = sdiv i64 bits, 8
+    br loop(v, %nb, 0, 0)
+  loop(v: i64, nb: i64, i: i64, acc: i64):
+    %done = icmp.sge i64 i, nb
+    condbr %done, fin(acc), body(v, nb, i, acc)
+  body(v: i64, nb: i64, i: i64, acc: i64):
+    %sh = shl i64 i, 3
+    %part = lshr i64 v, %sh
+    %byte = and i64 %part, 255
+    %last = sub i64 nb, 1
+    %ri = sub i64 %last, i
+    %rsh = shl i64 %ri, 3
+    %put = shl i64 %byte, %rsh
+    %a2 = or i64 acc, %put
+    %i2 = add i64 i, 1
+    br loop(v, nb, %i2, %a2)
+  fin(acc: i64):
+    ret acc
+}
+
+fn x_icmp() -> void {
+  entry():
+    %a_id = call i64 ira(32)
+    call void vtyp(%a_id)
+    %bits = call i64 ld64(46336)
+    %av = call i64 vg(%a_id)
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %pred = call i64 ira(64)
+    br disp(%pred, %av, %bv, %bits)
+  disp(pred: i64, av: i64, bv: i64, bits: i64):
+    %p0 = icmp.eq i64 pred, 0
+    condbr %p0, c_eq(av, bv), n1(pred, av, bv, bits)
+  c_eq(av: i64, bv: i64):
+    %r = icmp.eq i64 av, bv
+    br out(%r)
+  n1(pred: i64, av: i64, bv: i64, bits: i64):
+    %p1 = icmp.eq i64 pred, 1
+    condbr %p1, c_ne(av, bv), n2(pred, av, bv, bits)
+  c_ne(av: i64, bv: i64):
+    %r = icmp.ne i64 av, bv
+    br out(%r)
+  n2(pred: i64, av: i64, bv: i64, bits: i64):
+    %hi = icmp.sge i64 pred, 6
+    condbr %hi, sgn(pred, av, bv, bits), uns(pred, av, bv, bits)
+  uns(pred: i64, av: i64, bv: i64, bits: i64):
+    %x = call i64 maskw(av, bits)
+    %y = call i64 maskw(bv, bits)
+    %p2 = icmp.eq i64 pred, 2
+    condbr %p2, u_lt(%x, %y), u2(pred, %x, %y)
+  u_lt(x: i64, y: i64):
+    %r = icmp.ult i64 x, y
+    br out(%r)
+  u2(pred: i64, x: i64, y: i64):
+    %p3 = icmp.eq i64 pred, 3
+    condbr %p3, u_le(x, y), u3(pred, x, y)
+  u_le(x: i64, y: i64):
+    %r = icmp.ule i64 x, y
+    br out(%r)
+  u3(pred: i64, x: i64, y: i64):
+    %p4 = icmp.eq i64 pred, 4
+    condbr %p4, u_gt(x, y), u_ge(x, y)
+  u_gt(x: i64, y: i64):
+    %r = icmp.ugt i64 x, y
+    br out(%r)
+  u_ge(x: i64, y: i64):
+    %r = icmp.uge i64 x, y
+    br out(%r)
+  sgn(pred: i64, av: i64, bv: i64, bits: i64):
+    %x = call i64 sxtw(av, bits)
+    %y = call i64 sxtw(bv, bits)
+    %p6 = icmp.eq i64 pred, 6
+    condbr %p6, s_lt(%x, %y), s2(pred, %x, %y)
+  s_lt(x: i64, y: i64):
+    %r = icmp.slt i64 x, y
+    br out(%r)
+  s2(pred: i64, x: i64, y: i64):
+    %p7 = icmp.eq i64 pred, 7
+    condbr %p7, s_le(x, y), s3(pred, x, y)
+  s_le(x: i64, y: i64):
+    %r = icmp.sle i64 x, y
+    br out(%r)
+  s3(pred: i64, x: i64, y: i64):
+    %p8 = icmp.eq i64 pred, 8
+    condbr %p8, s_gt(x, y), s_ge(x, y)
+  s_gt(x: i64, y: i64):
+    %r = icmp.sgt i64 x, y
+    br out(%r)
+  s_ge(x: i64, y: i64):
+    %r = icmp.sge i64 x, y
+    br out(%r)
+  out(r: i1):
+    %z = zext i64 r
+    call void set_res(%z)
+    call void adv_pc()
+    ret
+}
+
+fn x_alu() -> void {
+  entry():
+    %op = call i64 ira(0)
+    %a_id = call i64 ira(32)
+    %av = call i64 vg(%a_id)
+    call void vtyp(%a_id)
+    %bits = call i64 ld64(46336)
+    %is19 = icmp.eq i64 %op, 19
+    condbr %is19, ic(), un(%op, %av, %bits)
+  ic():
+    call void x_icmp()
+    ret
+  un(op: i64, av: i64, bits: i64):
+    %is11 = icmp.eq i64 op, 11
+    condbr %is11, c_neg(av), u2(op, av, bits)
+  c_neg(av: i64):
+    %r = neg i64 av
+    br out(%r)
+  u2(op: i64, av: i64, bits: i64):
+    %is15 = icmp.eq i64 op, 15
+    condbr %is15, c_not(av), u3(op, av, bits)
+  c_not(av: i64):
+    %r = not i64 av
+    br out(%r)
+  u3(op: i64, av: i64, bits: i64):
+    %lo = icmp.sge i64 op, 20
+    %hi = icmp.sle i64 op, 23
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, bitops(op, av, bits), bin(op, av, bits)
+  bitops(op: i64, av: i64, bits: i64):
+    %is20 = icmp.eq i64 op, 20
+    condbr %is20, c_pop(av, bits), b2(op, av, bits)
+  c_pop(av: i64, bits: i64):
+    %r = call i64 popc_w(av, bits)
+    br out(%r)
+  b2(op: i64, av: i64, bits: i64):
+    %is21 = icmp.eq i64 op, 21
+    condbr %is21, c_clz(av, bits), b3(op, av, bits)
+  c_clz(av: i64, bits: i64):
+    %r = call i64 clz_w(av, bits)
+    br out(%r)
+  b3(op: i64, av: i64, bits: i64):
+    %is22 = icmp.eq i64 op, 22
+    condbr %is22, c_ctz(av, bits), c_bs(av, bits)
+  c_ctz(av: i64, bits: i64):
+    %r = call i64 ctz_w(av, bits)
+    br out(%r)
+  c_bs(av: i64, bits: i64):
+    %r = call i64 bswap_w(av, bits)
+    br out(%r)
+  bin(op: i64, av: i64, bits: i64):
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %is4 = icmp.eq i64 op, 4
+    condbr %is4, c_add(av, bv), d2(op, av, bv, bits)
+  c_add(av: i64, bv: i64):
+    %r = add i64 av, bv
+    br out(%r)
+  d2(op: i64, av: i64, bv: i64, bits: i64):
+    %is5 = icmp.eq i64 op, 5
+    condbr %is5, c_sub(av, bv), d3(op, av, bv, bits)
+  c_sub(av: i64, bv: i64):
+    %r = sub i64 av, bv
+    br out(%r)
+  d3(op: i64, av: i64, bv: i64, bits: i64):
+    %is6 = icmp.eq i64 op, 6
+    condbr %is6, c_mul(av, bv), d4(op, av, bv, bits)
+  c_mul(av: i64, bv: i64):
+    %r = mul i64 av, bv
+    br out(%r)
+  d4(op: i64, av: i64, bv: i64, bits: i64):
+    %is12 = icmp.eq i64 op, 12
+    condbr %is12, c_and(av, bv), d5(op, av, bv, bits)
+  c_and(av: i64, bv: i64):
+    %r = and i64 av, bv
+    br out(%r)
+  d5(op: i64, av: i64, bv: i64, bits: i64):
+    %is13 = icmp.eq i64 op, 13
+    condbr %is13, c_or(av, bv), d6(op, av, bv, bits)
+  c_or(av: i64, bv: i64):
+    %r = or i64 av, bv
+    br out(%r)
+  d6(op: i64, av: i64, bv: i64, bits: i64):
+    %is14 = icmp.eq i64 op, 14
+    condbr %is14, c_xor(av, bv), d7(op, av, bv, bits)
+  c_xor(av: i64, bv: i64):
+    %r = xor i64 av, bv
+    br out(%r)
+  d7(op: i64, av: i64, bv: i64, bits: i64):
+    %is7 = icmp.eq i64 op, 7
+    condbr %is7, c_udiv(av, bv, bits), d8(op, av, bv, bits)
+  c_udiv(av: i64, bv: i64, bits: i64):
+    %x = call i64 maskw(av, bits)
+    %y = call i64 maskw(bv, bits)
+    %z = icmp.eq i64 %y, 0
+    condbr %z, out0(), du(%x, %y)
+  du(x: i64, y: i64):
+    %r = udiv i64 x, y
+    br out(%r)
+  out0():
+    br out(0)
+  d8(op: i64, av: i64, bv: i64, bits: i64):
+    %is9 = icmp.eq i64 op, 9
+    condbr %is9, c_urem(av, bv, bits), d9(op, av, bv, bits)
+  c_urem(av: i64, bv: i64, bits: i64):
+    %x = call i64 maskw(av, bits)
+    %y = call i64 maskw(bv, bits)
+    %z = icmp.eq i64 %y, 0
+    condbr %z, out0(), ru(%x, %y)
+  ru(x: i64, y: i64):
+    %r = urem i64 x, y
+    br out(%r)
+  d9(op: i64, av: i64, bv: i64, bits: i64):
+    %is8 = icmp.eq i64 op, 8
+    condbr %is8, c_sdiv(av, bv, bits), d10(op, av, bv, bits)
+  c_sdiv(av: i64, bv: i64, bits: i64):
+    %x = call i64 sxtw(av, bits)
+    %y = call i64 sxtw(bv, bits)
+    %z = icmp.eq i64 %y, 0
+    condbr %z, out0(), ds(%x, %y)
+  ds(x: i64, y: i64):
+    %r = sdiv i64 x, y
+    br out(%r)
+  d10(op: i64, av: i64, bv: i64, bits: i64):
+    %is10 = icmp.eq i64 op, 10
+    condbr %is10, c_srem(av, bv, bits), d11(op, av, bv, bits)
+  c_srem(av: i64, bv: i64, bits: i64):
+    %x = call i64 sxtw(av, bits)
+    %y = call i64 sxtw(bv, bits)
+    %z = icmp.eq i64 %y, 0
+    condbr %z, out0(), rs(%x, %y)
+  rs(x: i64, y: i64):
+    %r = srem i64 x, y
+    br out(%r)
+  d11(op: i64, av: i64, bv: i64, bits: i64):
+    %sh = urem i64 av, bits
+    %is16 = icmp.eq i64 op, 16
+    condbr %is16, c_shl(av, bits), d12(op, av, bv, bits)
+  c_shl(av: i64, bits: i64):
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %sh = urem i64 %bv, bits
+    %r = shl i64 av, %sh
+    br out(%r)
+  d12(op: i64, av: i64, bv: i64, bits: i64):
+    %is17 = icmp.eq i64 op, 17
+    condbr %is17, c_lshr(av, bits), c_ashr(av, bits)
+  c_lshr(av: i64, bits: i64):
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %sh = urem i64 %bv, bits
+    %x = call i64 maskw(av, bits)
+    %r = lshr i64 %x, %sh
+    br out(%r)
+  c_ashr(av: i64, bits: i64):
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %sh = urem i64 %bv, bits
+    %x = call i64 sxtw(av, bits)
+    %r = ashr i64 %x, %sh
+    br out(%r)
+  out(r: i64):
+    call void set_res(r)
+    call void adv_pc()
+    ret
+}
+
+; ---- conversions and float -------------------------------------------
+
+fn x_cvt() -> void {
+  entry():
+    %op = call i64 ira(0)
+    %a_id = call i64 ira(32)
+    %av = call i64 vg(%a_id)
+    call void vtyp(%a_id)
+    %sb = call i64 ld64(46336)
+    %is24 = icmp.eq i64 %op, 24
+    condbr %is24, c_tr(av), n2(%op, %av, %sb)
+  c_tr(av: i64):
+    %rb = call i64 ira(24)
+    %r = call i64 maskw(av, %rb)
+    br out(%r)
+  n2(op: i64, av: i64, sb: i64):
+    %is25 = icmp.eq i64 op, 25
+    condbr %is25, c_zx(av, sb), n3(op, av, sb)
+  c_zx(av: i64, sb: i64):
+    %r = call i64 maskw(av, sb)
+    br out(%r)
+  n3(op: i64, av: i64, sb: i64):
+    %is26 = icmp.eq i64 op, 26
+    condbr %is26, c_sx(av, sb), out(av)
+  c_sx(av: i64, sb: i64):
+    %r = call i64 sxtw(av, sb)
+    br out(%r)
+  out(r: i64):
+    call void set_res(r)
+    call void adv_pc()
+    ret
+}
+
+fn to_f64(i64, i64) -> f64 {
+  entry(bits_pat: i64, bits: i64):
+    %is32 = icmp.eq i64 bits, 32
+    condbr %is32, f32(bits_pat), f64(bits_pat)
+  f32(p: i64):
+    %t = trunc i32 p
+    %f = bitcast f32 %t
+    %d = fext f64 %f
+    ret %d
+  f64(p: i64):
+    %d = bitcast f64 p
+    ret %d
+}
+
+fn from_f64(f64, i64) -> i64 {
+  entry(d: f64, bits: i64):
+    %is32 = icmp.eq i64 bits, 32
+    condbr %is32, f32(d), f64(d)
+  f32(d: f64):
+    %f = ftrunc f32 d
+    %t = bitcast i32 %f
+    %z = zext i64 %t
+    ret %z
+  f64(d: f64):
+    %p = bitcast i64 d
+    ret %p
+}
+
+fn x_fp() -> void {
+  entry():
+    %op = call i64 ira(0)
+    %rb = call i64 ira(24)
+    %a_id = call i64 ira(32)
+    %av = call i64 vg(%a_id)
+    %fa = call f64 to_f64(%av, %rb)
+    %is31 = icmp.eq i64 %op, 31
+    condbr %is31, c_neg(%fa, %rb), n2(%op, %fa, %rb)
+  c_neg(fa: f64, rb: i64):
+    %r = fneg f64 %fa
+    br out(%r, rb)
+  n2(op: i64, fa: f64, rb: i64):
+    %is32 = icmp.eq i64 op, 32
+    condbr %is32, c_abs(fa, rb), bin(op, fa, rb)
+  c_abs(fa: f64, rb: i64):
+    %r = fabs f64 %fa
+    br out(%r, rb)
+  bin(op: i64, fa: f64, rb: i64):
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %fb = call f64 to_f64(%bv, rb)
+    %is27 = icmp.eq i64 op, 27
+    condbr %is27, c_add(fa, fb, rb), d2(op, fa, fb, rb)
+  c_add(fa: f64, fb: f64, rb: i64):
+    %r = fadd f64 %fa, %fb
+    br out(%r, rb)
+  d2(op: i64, fa: f64, fb: f64, rb: i64):
+    %is28 = icmp.eq i64 op, 28
+    condbr %is28, c_sub(fa, fb, rb), d3(op, fa, fb, rb)
+  c_sub(fa: f64, fb: f64, rb: i64):
+    %r = fsub f64 %fa, %fb
+    br out(%r, rb)
+  d3(op: i64, fa: f64, fb: f64, rb: i64):
+    %is29 = icmp.eq i64 op, 29
+    condbr %is29, c_mul(fa, fb, rb), d4(op, fa, fb, rb)
+  c_mul(fa: f64, fb: f64, rb: i64):
+    %r = fmul f64 %fa, %fb
+    br out(%r, rb)
+  d4(op: i64, fa: f64, fb: f64, rb: i64):
+    %is30 = icmp.eq i64 op, 30
+    condbr %is30, c_div(fa, fb, rb), c_fma(op, fa, fb, rb)
+  c_div(fa: f64, fb: f64, rb: i64):
+    %r = fdiv f64 %fa, %fb
+    br out(%r, rb)
+  c_fma(op: i64, fa: f64, fb: f64, rb: i64):
+    %c_id = call i64 ira(48)
+    %cv = call i64 vg(%c_id)
+    %fc = call f64 to_f64(%cv, rb)
+    %p = fmul f64 %fa, %fb
+    %r = fadd f64 %p, %fc
+    br out(%r, rb)
+  out(r: f64, rb: i64):
+    %p = call i64 from_f64(r, rb)
+    call void set_res(%p)
+    call void adv_pc()
+    ret
+}
+
+fn x_fcmp1(i64, f64, f64) -> i64 {
+  entry(pred: i64, x: f64, y: f64):
+    %p0 = icmp.eq i64 pred, 0
+    condbr %p0, c0(x, y), n1(pred, x, y)
+  c0(x: f64, y: f64):
+    %r = fcmp.oeq f64 x, y
+    br out(%r)
+  n1(pred: i64, x: f64, y: f64):
+    %p1 = icmp.eq i64 pred, 1
+    condbr %p1, c1(x, y), n2(pred, x, y)
+  c1(x: f64, y: f64):
+    %r = fcmp.one f64 x, y
+    br out(%r)
+  n2(pred: i64, x: f64, y: f64):
+    %p2 = icmp.eq i64 pred, 2
+    condbr %p2, c2(x, y), n3(pred, x, y)
+  c2(x: f64, y: f64):
+    %r = fcmp.olt f64 x, y
+    br out(%r)
+  n3(pred: i64, x: f64, y: f64):
+    %p3 = icmp.eq i64 pred, 3
+    condbr %p3, c3(x, y), n4(pred, x, y)
+  c3(x: f64, y: f64):
+    %r = fcmp.ole f64 x, y
+    br out(%r)
+  n4(pred: i64, x: f64, y: f64):
+    %p4 = icmp.eq i64 pred, 4
+    condbr %p4, c4(x, y), n5(pred, x, y)
+  c4(x: f64, y: f64):
+    %r = fcmp.ogt f64 x, y
+    br out(%r)
+  n5(pred: i64, x: f64, y: f64):
+    %p5 = icmp.eq i64 pred, 5
+    condbr %p5, c5(x, y), n6(pred, x, y)
+  c5(x: f64, y: f64):
+    %r = fcmp.oge f64 x, y
+    br out(%r)
+  n6(pred: i64, x: f64, y: f64):
+    %p6 = icmp.eq i64 pred, 6
+    condbr %p6, c6(x, y), n7(pred, x, y)
+  c6(x: f64, y: f64):
+    %r = fcmp.ueq f64 x, y
+    br out(%r)
+  n7(pred: i64, x: f64, y: f64):
+    %p7 = icmp.eq i64 pred, 7
+    condbr %p7, c7(x, y), n8(pred, x, y)
+  c7(x: f64, y: f64):
+    %r = fcmp.une f64 x, y
+    br out(%r)
+  n8(pred: i64, x: f64, y: f64):
+    %p8 = icmp.eq i64 pred, 8
+    condbr %p8, c8(x, y), n9(pred, x, y)
+  c8(x: f64, y: f64):
+    %r = fcmp.ult f64 x, y
+    br out(%r)
+  n9(pred: i64, x: f64, y: f64):
+    %p9 = icmp.eq i64 pred, 9
+    condbr %p9, c9(x, y), n10(pred, x, y)
+  c9(x: f64, y: f64):
+    %r = fcmp.ule f64 x, y
+    br out(%r)
+  n10(pred: i64, x: f64, y: f64):
+    %p10 = icmp.eq i64 pred, 10
+    condbr %p10, c10(x, y), n11(pred, x, y)
+  c10(x: f64, y: f64):
+    %r = fcmp.ugt f64 x, y
+    br out(%r)
+  n11(pred: i64, x: f64, y: f64):
+    %p11 = icmp.eq i64 pred, 11
+    condbr %p11, c11(x, y), n12(pred, x, y)
+  c11(x: f64, y: f64):
+    %r = fcmp.uge f64 x, y
+    br out(%r)
+  n12(pred: i64, x: f64, y: f64):
+    %p12 = icmp.eq i64 pred, 12
+    condbr %p12, c12(x, y), c13(x, y)
+  c12(x: f64, y: f64):
+    %r = fcmp.ord f64 x, y
+    br out(%r)
+  c13(x: f64, y: f64):
+    %r = fcmp.uno f64 x, y
+    br out(%r)
+  out(r: i1):
+    %z = zext i64 r
+    ret %z
+}
+
+fn x_fcmp() -> void {
+  entry():
+    %a_id = call i64 ira(32)
+    call void vtyp(%a_id)
+    %bits = call i64 ld64(46336)
+    %av = call i64 vg(%a_id)
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %fa = call f64 to_f64(%av, %bits)
+    %fb = call f64 to_f64(%bv, %bits)
+    %pred = call i64 ira(64)
+    %r = call i64 x_fcmp1(%pred, %fa, %fb)
+    call void set_res(%r)
+    call void adv_pc()
+    ret
+}
+
+fn x_fconv() -> void {
+  entry():
+    %op = call i64 ira(0)
+    %a_id = call i64 ira(32)
+    call void vtyp(%a_id)
+    %sb = call i64 ld64(46336)
+    %av = call i64 vg(%a_id)
+    %fa = call f64 to_f64(%av, %sb)
+    %rb = call i64 ira(24)
+    %p = call i64 from_f64(%fa, %rb)
+    call void set_res(%p)
+    call void adv_pc()
+    ret
+}
+
+fn x_f2i() -> void {
+  entry():
+    %e64 = iconst i64 64
+    %e1 = iconst i64 1
+    %op = call i64 ira(0)
+    %rb = call i64 ira(24)
+    %a_id = call i64 ira(32)
+    call void vtyp(%a_id)
+    %sb = call i64 ld64(46336)
+    %av = call i64 vg(%a_id)
+    %fa = call f64 to_f64(%av, %sb)
+    %nan = fcmp.uno f64 %fa, %fa
+    condbr %nan, zero(), conv(%op, %fa, %rb)
+  zero():
+    call void set_res(0)
+    call void adv_pc()
+    ret
+  conv(op: i64, fa: f64, rb: i64):
+    %is37 = icmp.eq i64 op, 37
+    condbr %is37, si(fa, rb), ui(fa, rb)
+  si(fa: f64, rb: i64):
+    %v = fptosi i64 %fa
+    br clamp_s(%v, rb)
+  ui(fa: f64, rb: i64):
+    %v = fptoui i64 %fa
+    br clamp_u(%v, rb)
+  clamp_s(v: i64, rb: i64):
+    %full = icmp.sge i64 rb, 64
+    condbr %full, out(v), narrow_s(v, rb)
+  narrow_s(v: i64, rb: i64):
+    %sh = sub i64 rb, 1
+    %mx = shl i64 1, %sh
+    %mx2 = sub i64 %mx, 1
+    %mn = neg i64 %mx
+    %hi = icmp.sgt i64 v, %mx2
+    condbr %hi, out(%mx2), lo(v, %mn)
+  lo(v: i64, mn: i64):
+    %lw = icmp.slt i64 v, mn
+    condbr %lw, out(mn), out(v)
+  clamp_u(v: i64, rb: i64):
+    %full = icmp.sge i64 rb, 64
+    condbr %full, out(v), narrow_u(v, rb)
+  narrow_u(v: i64, rb: i64):
+    %mx = shl i64 1, rb
+    %mx2 = sub i64 %mx, 1
+    %hi = icmp.ugt i64 v, %mx2
+    condbr %hi, out(%mx2), out(v)
+  out(v: i64):
+    call void set_res(v)
+    call void adv_pc()
+    ret
+}
+
+fn x_i2f() -> void {
+  entry():
+    %op = call i64 ira(0)
+    %rb = call i64 ira(24)
+    %a_id = call i64 ira(32)
+    call void vtyp(%a_id)
+    %sb = call i64 ld64(46336)
+    %av = call i64 vg(%a_id)
+    %is39 = icmp.eq i64 %op, 39
+    condbr %is39, si(%av, %sb, %rb), ui(%av, %sb, %rb)
+  si(av: i64, sb: i64, rb: i64):
+    %x = call i64 sxtw(av, sb)
+    %f = sitofp f64 %x
+    br out(%f, rb)
+  ui(av: i64, sb: i64, rb: i64):
+    %x = call i64 maskw(av, sb)
+    %f = uitofp f64 %x
+    br out(%f, rb)
+  out(f: f64, rb: i64):
+    %p = call i64 from_f64(f, rb)
+    call void set_res(%p)
+    call void adv_pc()
+    ret
+}
+
+fn x_select() -> void {
+  entry():
+    %a_id = call i64 ira(32)
+    %cv = call i64 vg(%a_id)
+    %c = and i64 %cv, 1
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %c_id = call i64 ira(48)
+    %cv2 = call i64 vg(%c_id)
+    %is = icmp.ne i64 %c, 0
+    condbr %is, t(%bv), f(%cv2)
+  t(v: i64):
+    call void set_res(v)
+    call void adv_pc()
+    ret
+  f(v: i64):
+    call void set_res(v)
+    call void adv_pc()
+    ret
+}
+
+; ---- memory ops --------------------------------------------------------
+
+fn baddr(i64, i64) -> i64 {
+  entry(off: i64, size: i64):
+    %neg = icmp.slt i64 off, 0
+    condbr %neg, bad(), chk(off, size)
+  chk(off: i64, size: i64):
+    %end = add i64 off, size
+    %over = icmp.sgt i64 %end, 262144
+    condbr %over, bad(), ok(off)
+  ok(off: i64):
+    %B = call i64 ld64(45832)
+    %r = add i64 %B, off
+    ret %r
+  bad():
+    call void fault(91)
+    ret 0
+}
+
+fn ty_size(i64, i64) -> i64 {
+  entry(k: i64, b: i64):
+    %e8 = iconst i64 8
+    %is3 = icmp.eq i64 k, 3
+    condbr %is3, p(), nb(b)
+  p():
+    ret 8
+  nb(b: i64):
+    %s = sdiv i64 b, 8
+    %z = icmp.eq i64 %s, 0
+    condbr %z, one(), out(%s)
+  one():
+    ret 1
+  out(s: i64):
+    ret s
+}
+
+fn load_n(i64, i64) -> i64 {
+  entry(ha: i64, size: i64):
+    %is8 = icmp.eq i64 size, 8
+    condbr %is8, l8(ha), s4(ha, size)
+  l8(ha: i64):
+    %v = call i64 mload(ha)
+    ret %v
+  s4(ha: i64, size: i64):
+    %is4 = icmp.eq i64 size, 4
+    condbr %is4, l4(ha), small(ha, size)
+  l4(ha: i64):
+    %v = call i64 mload32(ha)
+    ret %v
+  small(ha: i64, size: i64):
+    br loop(ha, size, 0, 0)
+  loop(ha: i64, size: i64, i: i64, acc: i64):
+    %done = icmp.sge i64 i, size
+    condbr %done, fin(acc), body(ha, size, i, acc)
+  body(ha: i64, size: i64, i: i64, acc: i64):
+    %a = add i64 ha, i
+    %byte = call i64 mload8(%a)
+    %sh = shl i64 i, 3
+    %put = shl i64 %byte, %sh
+    %a2 = or i64 acc, %put
+    %i2 = add i64 i, 1
+    br loop(ha, size, %i2, %a2)
+  fin(acc: i64):
+    ret acc
+}
+
+fn store_n(i64, i64, i64) -> void {
+  entry(ha: i64, v: i64, size: i64):
+    %is8 = icmp.eq i64 size, 8
+    condbr %is8, s8(ha, v), s4(ha, v, size)
+  s8(ha: i64, v: i64):
+    call void mstore(ha, v)
+    ret
+  s4(ha: i64, v: i64, size: i64):
+    %is4 = icmp.eq i64 size, 4
+    condbr %is4, w4(ha, v), small(ha, v, size)
+  w4(ha: i64, v: i64):
+    %t = trunc i32 v
+    call void mstore32(ha, %t)
+    ret
+  small(ha: i64, v: i64, size: i64):
+    br loop(ha, v, size, 0)
+  loop(ha: i64, v: i64, size: i64, i: i64):
+    %done = icmp.sge i64 i, size
+    condbr %done, fin(), body(ha, v, size, i)
+  body(ha: i64, v: i64, size: i64, i: i64):
+    %sh = shl i64 i, 3
+    %part = lshr i64 v, %sh
+    %byte = and i64 %part, 255
+    %a = add i64 ha, i
+    call void mstore8(%a, %byte)
+    %i2 = add i64 i, 1
+    br loop(ha, v, size, %i2)
+  fin():
+    ret
+}
+
+fn x_mem() -> void {
+  entry():
+    %e16 = iconst i64 16
+    %e24 = iconst i64 24
+    %e32 = iconst i64 32
+    %e40 = iconst i64 40
+    %e48 = iconst i64 48
+    %e56 = iconst i64 56
+    %e1 = iconst i64 1
+    %e45848 = iconst i64 45848
+    %op = call i64 ira(0)
+    %is43 = icmp.eq i64 %op, 43
+    condbr %is43, load(), n2(%op)
+  load():
+    %k = call i64 ira(16)
+    %b = call i64 ira(24)
+    %sz = call i64 ty_size(%k, %b)
+    %a_id = call i64 ira(32)
+    %addr = call i64 vg(%a_id)
+    %ha = call i64 baddr(%addr, %sz)
+    %st = call i64 ld64(45848)
+    %bad = icmp.ne i64 %st, 0
+    condbr %bad, fin(), lgo(%ha, %sz)
+  lgo(ha: i64, sz: i64):
+    %v = call i64 load_n(ha, sz)
+    call void set_res(%v)
+    call void adv_pc()
+    br fin()
+  n2(op: i64):
+    %is44 = icmp.eq i64 op, 44
+    condbr %is44, store(), n3(op)
+  store():
+    %k = call i64 ira(16)
+    %b = call i64 ira(24)
+    %sz = call i64 ty_size(%k, %b)
+    %a_id = call i64 ira(32)
+    %addr = call i64 vg(%a_id)
+    %ha = call i64 baddr(%addr, %sz)
+    %st = call i64 ld64(45848)
+    %bad = icmp.ne i64 %st, 0
+    condbr %bad, fin(), sgo(%ha, %sz)
+  sgo(ha: i64, sz: i64):
+    %b_id = call i64 ira(40)
+    %v = call i64 vg(%b_id)
+    call void store_n(ha, %v, sz)
+    call void adv_pc()
+    br fin()
+  n3(op: i64):
+    %is45 = icmp.eq i64 op, 45
+    condbr %is45, gep(), n4(op)
+  gep():
+    %a_id = call i64 ira(32)
+    %base = call i64 vg(%a_id)
+    %b_id = call i64 ira(40)
+    %ix = call i64 vg(%b_id)
+    %es = call i64 ira(136)
+    %off = mul i64 %ix, %es
+    %r = add i64 %base, %off
+    call void set_res(%r)
+    call void adv_pc()
+    br fin()
+  n4(op: i64):
+    %is42 = icmp.eq i64 op, 42
+    condbr %is42, alloc(), n5(op)
+  alloc():
+    %sz = call i64 ira(56)
+    %bump = call i64 ld64(45880)
+    %a15 = add i64 %sz, 15
+    %al = and i64 %a15, -16
+    %min = icmp.eq i64 %al, 0
+    condbr %min, a16(%bump), ago(%bump, %al)
+  a16(bump: i64):
+    br ago(bump, 16)
+  ago(bump: i64, al: i64):
+    %nb = add i64 bump, al
+    %over = icmp.sgt i64 %nb, 262144
+    condbr %over, oom(), aok(bump, %nb)
+  aok(bump: i64, nb: i64):
+    call void st64(45880, nb)
+    call void set_res(bump)
+    call void adv_pc()
+    br fin()
+  oom():
+    call void fault(91)
+    br fin()
+  n5(op: i64):
+    %is48 = icmp.eq i64 op, 48
+    condbr %is48, dp(), n6(op)
+  dp():
+    %ix = call i64 ira(56)
+    %A = call i64 ld64(45824)
+    %nd = call i64 mload(%A)
+    %nd2a = add i64 %A, 40
+    %nd2 = call i64 mload(%nd2a)
+    %bad = icmp.sge i64 %ix, %nd2
+    condbr %bad, df(), dok(%ix)
+  df():
+    call void fault(94)
+    br fin()
+  dok(ix: i64):
+    %A = call i64 ld64(45824)
+    %doa = add i64 %A, 144
+    %do = call i64 mload(%doa)
+    %sh = shl i64 %ix, 4
+    %rec = add i64 %A, %do
+    %rec2 = add i64 %rec, %sh
+    %off = call i64 mload(%rec2)
+    call void set_res(%off)
+    call void adv_pc()
+    br fin()
+  n6(op: i64):
+    %is46 = icmp.eq i64 op, 46
+    condbr %is46, cpy(), n7(op)
+  cpy():
+    %a_id = call i64 ira(32)
+    %dst = call i64 vg(%a_id)
+    %b_id = call i64 ira(40)
+    %src = call i64 vg(%b_id)
+    %c_id = call i64 ira(48)
+    %n = call i64 vg(%c_id)
+    %hd = call i64 baddr(%dst, %n)
+    %st = call i64 ld64(45848)
+    %bad = icmp.ne i64 %st, 0
+    condbr %bad, fin(), cpy2(%dst, %src, %n)
+  cpy2(dst: i64, src: i64, n: i64):
+    %hs = call i64 baddr(src, n)
+    %st = call i64 ld64(45848)
+    %bad = icmp.ne i64 %st, 0
+    condbr %bad, fin(), cpy3(dst, src, n)
+  cpy3(dst: i64, src: i64, n: i64):
+    %B = call i64 ld64(45832)
+    %hd = add i64 %B, dst
+    %hs = add i64 %B, src
+    %fwd = icmp.sle i64 dst, src
+    condbr %fwd, fwd(%hd, %hs, n), bwd(%hd, %hs, n)
+  fwd(hd: i64, hs: i64, n: i64):
+    call void copy_bytes(hd, hs, n)
+    call void adv_pc()
+    br fin()
+  bwd(hd: i64, hs: i64, n: i64):
+    br bloop(hd, hs, n, n)
+  bloop(hd: i64, hs: i64, n: i64, i: i64):
+    %done = icmp.sle i64 i, 0
+    condbr %done, bdone(), bbody(hd, hs, n, i)
+  bbody(hd: i64, hs: i64, n: i64, i: i64):
+    %j = sub i64 i, 1
+    %sa = add i64 hs, %j
+    %v = call i64 mload8(%sa)
+    %da = add i64 hd, %j
+    call void mstore8(%da, %v)
+    br bloop(hd, hs, n, %j)
+  bdone():
+    call void adv_pc()
+    br fin()
+  n7(op: i64):
+    %a_id = call i64 ira(32)
+    %dst = call i64 vg(%a_id)
+    %b_id = call i64 ira(40)
+    %bv = call i64 vg(%b_id)
+    %c_id = call i64 ira(48)
+    %n = call i64 vg(%c_id)
+    %hd = call i64 baddr(%dst, %n)
+    %st = call i64 ld64(45848)
+    %bad = icmp.ne i64 %st, 0
+    condbr %bad, fin(), set(%hd, %bv, %n)
+  set(hd: i64, bv: i64, n: i64):
+    %byte = and i64 bv, 255
+    br sloop(hd, %byte, n, 0)
+  sloop(hd: i64, byte: i64, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, sdone(), sbody(hd, byte, n, i)
+  sbody(hd: i64, byte: i64, n: i64, i: i64):
+    %a = add i64 hd, i
+    call void mstore8(%a, byte)
+    %i2 = add i64 i, 1
+    br sloop(hd, byte, n, %i2)
+  sdone():
+    call void adv_pc()
+    br fin()
+  fin():
+    ret
+}
+
+; ---- control flow ------------------------------------------------------
+
+fn eval_args(i64, i64) -> void {
+  entry(off: i64, n: i64):
+    br loop(off, n, 0)
+  loop(off: i64, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(off, n, i)
+  body(off: i64, n: i64, i: i64):
+    %ix = add i64 off, i
+    %vid = call i64 poolv(%ix)
+    %v = call i64 vg(%vid)
+    %sh = shl i64 i, 3
+    %sa = add i64 46080, %sh
+    call void mstore(%sa, %v)
+    %i2 = add i64 i, 1
+    br loop(off, n, %i2)
+  fin():
+    ret
+}
+
+fn write_args(i64) -> void {
+  entry(blk: i64):
+    %rec = call i64 blkrec(blk)
+    %poa = add i64 %rec, 16
+    %po = call i64 mload(%poa)
+    %na = add i64 %rec, 8
+    %n = call i64 mload(%na)
+    br loop(blk, %po, %n, 0)
+  loop(blk: i64, po: i64, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(blk, po, n, i)
+  body(blk: i64, po: i64, n: i64, i: i64):
+    %ix = add i64 po, i
+    %vid = call i64 poolv(%ix)
+    %sh = shl i64 i, 3
+    %sa = add i64 46080, %sh
+    %v = call i64 mload(%sa)
+    call void vs(%vid, %v)
+    %i2 = add i64 i, 1
+    br loop(blk, po, n, %i2)
+  fin():
+    ret
+}
+
+fn jump_to(i64, i64, i64) -> void {
+  entry(blk: i64, off: i64, n: i64):
+    call void eval_args(off, n)
+    call void fst(8, blk)
+    call void write_args(blk)
+    call void fst(16, 0)
+    ret
+}
+
+fn x_br() -> void {
+  entry():
+    %blk = call i64 ira(72)
+    %off = call i64 ira(112)
+    %n = call i64 ira(104)
+    call void jump_to(%blk, %off, %n)
+    ret
+}
+
+fn x_condbr() -> void {
+  entry():
+    %a_id = call i64 ira(32)
+    %cv = call i64 vg(%a_id)
+    %c = and i64 %cv, 1
+    %is = icmp.ne i64 %c, 0
+    condbr %is, t(), f()
+  t():
+    %blk = call i64 ira(72)
+    %off = call i64 ira(112)
+    %n = call i64 ira(104)
+    call void jump_to(%blk, %off, %n)
+    ret
+  f():
+    %blk = call i64 ira(80)
+    %off = call i64 ira(128)
+    %n = call i64 ira(120)
+    call void jump_to(%blk, %off, %n)
+    ret
+}
+
+fn x_ret() -> void {
+  entry():
+    %e1 = iconst i64 1
+    %a_id = call i64 ira(32)
+    %none = icmp.slt i64 %a_id, 0
+    condbr %none, nov(), hv(%a_id)
+  nov():
+    br pop(0)
+  hv(a_id: i64):
+    %v = call i64 vg(%a_id)
+    br pop(%v)
+  pop(v: i64):
+    %top = call i64 ld64(45864)
+    %A = call i64 ld64(45824)
+    %foa = add i64 %A, 80
+    %fo = call i64 mload(%foa)
+    %bot = icmp.eq i64 %top, %fo
+    condbr %bot, done(v), up(v)
+  done(v: i64):
+    call void st64(45848, 1)
+    call void st64(45856, v)
+    ret
+  up(v: i64):
+    %rs = call i64 fld(32)
+    %rb = call i64 fld(40)
+    %rp = call i64 fld(48)
+    %vb = call i64 fld(24)
+    call void st64(45872, %vb)
+    %nt = sub i64 %top, 56
+    %top2 = call i64 ld64(45864)
+    %nta = sub i64 %top2, 56
+    call void st64(45864, %nta)
+    call void fst(8, %rb)
+    %rp2 = add i64 %rp, 1
+    call void fst(16, %rp2)
+    %neg = icmp.slt i64 %rs, 0
+    condbr %neg, fin(), wr(%rs, v)
+  wr(rs: i64, v: i64):
+    call void vs(rs, v)
+    br fin()
+  fin():
+    ret
+}
+
+; ---- host calls and function calls -------------------------------------
+
+fn host_call(i64) -> i64 {
+  entry(xrec: i64):
+    %e0 = iconst i64 0
+    %e46080 = iconst i64 46080
+    %e262144 = iconst i64 262144
+    %h16 = add i64 xrec, 16
+    %hid = call i64 mload(%h16)
+    %is1 = icmp.eq i64 %hid, 1
+    condbr %is1, h_print(), n2(%hid)
+  h_print():
+    %off = call i64 mload(46080)
+    %B = call i64 ld64(45832)
+    br ploop(%B, %off)
+  ploop(B: i64, off: i64):
+    %over = icmp.sge i64 off, 262144
+    condbr %over, hfin(), pbody(B, off)
+  pbody(B: i64, off: i64):
+    %a = add i64 B, off
+    %c = call i64 mload8(%a)
+    %z = icmp.eq i64 %c, 0
+    condbr %z, hfin(), pput(B, off, %c)
+  pput(B: i64, off: i64, c: i64):
+    call void con_putc(c)
+    %o2 = add i64 off, 1
+    br ploop(B, %o2)
+  hfin():
+    ret 0
+  n2(hid: i64):
+    %is2 = icmp.eq i64 hid, 2
+    condbr %is2, h_putn(), n3(hid)
+  h_putn():
+    %v = call i64 mload(46080)
+    call void putu(%v)
+    ret 0
+  n3(hid: i64):
+    %is3 = icmp.eq i64 hid, 3
+    condbr %is3, h_putc(), n4(hid)
+  h_putc():
+    %v = call i64 mload(46080)
+    call void con_putc(%v)
+    ret 0
+  n4(hid: i64):
+    %is4 = icmp.eq i64 hid, 4
+    condbr %is4, h_ticks(), n5(hid)
+  h_ticks():
+    %v = call i64 ld64(0)
+    ret %v
+  n5(hid: i64):
+    %is5 = icmp.eq i64 hid, 5
+    condbr %is5, h_alloc(), n6(hid)
+  h_alloc():
+    %n = call i64 mload(46080)
+    %bump = call i64 ld64(45880)
+    %a15 = add i64 %n, 15
+    %al = and i64 %a15, -16
+    %min = icmp.eq i64 %al, 0
+    condbr %min, ha16(%bump), hago(%bump, %al)
+  ha16(bump: i64):
+    br hago(bump, 16)
+  hago(bump: i64, al: i64):
+    %nb = add i64 bump, al
+    %over = icmp.sgt i64 %nb, 262144
+    condbr %over, hneg(), haok(bump, %nb)
+  haok(bump: i64, nb: i64):
+    call void st64(45880, nb)
+    ret bump
+  hneg():
+    ret -1
+  n6(hid: i64):
+    ret 0
+}
+
+fn x_call() -> void {
+  entry():
+    %e45824 = iconst i64 45824
+    %e32 = iconst i64 32
+    %e48 = iconst i64 48
+    %e24 = iconst i64 24
+    %e3 = iconst i64 3
+    %e65536 = iconst i64 65536
+    %e45872 = iconst i64 45872
+    %e8 = iconst i64 8
+    %e16 = iconst i64 16
+    %callee = call i64 ira(88)
+    %cex = call i64 ira(96)
+    %off = call i64 ira(112)
+    %n = call i64 ira(104)
+    call void eval_args(%off, %n)
+    %isx = icmp.ne i64 %cex, 0
+    condbr %isx, ext(%callee), fn(%callee, %n)
+  ext(x: i64):
+    %A = call i64 ld64(45824)
+    %xoa = add i64 %A, 136
+    %xo = call i64 mload(%xoa)
+    %sh = shl i64 x, 5
+    %rec = add i64 %A, %xo
+    %rec2 = add i64 %rec, %sh
+    %r = call i64 host_call(%rec2)
+    call void set_res(%r)
+    call void adv_pc()
+    ret
+  fn(f: i64, n: i64):
+    %op = call i64 ira(0)
+    %tail = icmp.eq i64 %op, 72
+    condbr %tail, tail(f, n), push(f, n)
+  push(f: i64, n: i64):
+    %rec = call i64 funrec(f)
+    %b32 = add i64 %rec, 32
+    %blk0 = call i64 mload(%b32)
+    %n48 = add i64 %rec, 48
+    %nv = call i64 mload(%n48)
+    %top = call i64 ld64(45864)
+    %nt = add i64 %top, 56
+    %A = call i64 ld64(45824)
+    %foa = add i64 %A, 80
+    %fo = call i64 mload(%foa)
+    %fend = add i64 %fo, 32768
+    %over = icmp.sge i64 %nt, %fend
+    condbr %over, f92(), vchk(f, %blk0, %nv, %nt)
+  vchk(f: i64, blk0: i64, nv: i64, nt: i64):
+    %bump = call i64 ld64(45872)
+    %need = add i64 %bump, %nv
+    %need8 = shl i64 %nv, 3
+    %needb = add i64 %bump, %need8
+    %A = call i64 ld64(45824)
+    %voa = add i64 %A, 88
+    %vo = call i64 mload(%voa)
+    %vend = add i64 %vo, 65536
+    %over = icmp.sgt i64 %needb, %vend
+    condbr %over, f92(), mkframe(f, blk0, nv, nt, %bump)
+  mkframe(f: i64, blk0: i64, nv: i64, nt: i64, vb: i64):
+    %res = call i64 ira(8)
+    %cb = call i64 fld(8)
+    %cp = call i64 fld(16)
+    call void st64(45864, nt)
+    call void fst(0, f)
+    call void fst(8, blk0)
+    call void fst(16, 0)
+    call void fst(24, vb)
+    call void fst(32, %res)
+    call void fst(40, %cb)
+    call void fst(48, %cp)
+    %need8 = shl i64 nv, 3
+    %nb = add i64 vb, %need8
+    call void st64(45872, %nb)
+    call void write_args(blk0)
+    ret
+  tail(f: i64, n: i64):
+    %rec = call i64 funrec(f)
+    %b32 = add i64 %rec, 32
+    %blk0 = call i64 mload(%b32)
+    %n48 = add i64 %rec, 48
+    %nv = call i64 mload(%n48)
+    %vb = call i64 fld(24)
+    %need8 = shl i64 %nv, 3
+    %needb = add i64 %vb, %need8
+    %A = call i64 ld64(45824)
+    %voa = add i64 %A, 88
+    %vo = call i64 mload(%voa)
+    %vend = add i64 %vo, 65536
+    %over = icmp.sgt i64 %needb, %vend
+    condbr %over, f92(), tgo(f, blk0, nv, vb, %needb)
+  tgo(f: i64, blk0: i64, nv: i64, vb: i64, needb: i64):
+    %bump = call i64 ld64(45872)
+    %grow = icmp.sgt i64 needb, %bump
+    condbr %grow, tset(f, blk0, needb), tmk(f, blk0)
+  tset(f: i64, blk0: i64, needb: i64):
+    call void st64(45872, needb)
+    br tmk(f, blk0)
+  tmk(f: i64, blk0: i64):
+    call void fst(0, f)
+    call void write_args(blk0)
+    call void fst(8, blk0)
+    call void fst(16, 0)
+    ret
+  f92():
+    call void fault(92)
+    ret
+}
+
+; ---- step and main loop --------------------------------------------------
+
+fn exec_step() -> void {
+  entry():
+    %e94 = iconst i64 94
+    %blk = call i64 fld(8)
+    %rec = call i64 blkrec(%blk)
+    %pc = call i64 fld(16)
+    %i24 = add i64 %rec, 24
+    %istart = call i64 mload(%i24)
+    %i32 = add i64 %rec, 32
+    %nins = call i64 mload(%i32)
+    %over = icmp.sge i64 %pc, %nins
+    condbr %over, f94(), go(%istart, %pc)
+  f94():
+    call void fault(94)
+    ret
+  go(istart: i64, pc: i64):
+    %idx = add i64 %istart, %pc
+    %A = call i64 ld64(45824)
+    %ioa = add i64 %A, 112
+    %io = call i64 mload(%ioa)
+    %s1 = shl i64 %idx, 7
+    %s2 = shl i64 %idx, 4
+    %off = add i64 %s1, %s2
+    %addr = add i64 %A, %io
+    %addr2 = add i64 %addr, %off
+    call void st64(45944, %addr2)
+    %op = call i64 mload(%addr2)
+    br disp(%op)
+  disp(op: i64):
+    %is1 = icmp.eq i64 op, 1
+    condbr %is1, imm(), d2(op)
+  imm():
+    %v = call i64 ira(56)
+    call void set_res(%v)
+    call void adv_pc()
+    ret
+  d2(op: i64):
+    %lo = icmp.sge i64 op, 3
+    %hi = icmp.sle i64 op, 23
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, alu(op), d3(op)
+  alu(op: i64):
+    %is3 = icmp.eq i64 op, 3
+    condbr %is3, copy(), alugo(op)
+  copy():
+    %a_id = call i64 ira(32)
+    %v = call i64 vg(%a_id)
+    call void set_res(%v)
+    call void adv_pc()
+    ret
+  alugo(op: i64):
+    call void x_alu()
+    ret
+  d3(op: i64):
+    %lo = icmp.sge i64 op, 24
+    %hi = icmp.sle i64 op, 26
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, cvt(), d4(op)
+  cvt():
+    call void x_cvt()
+    ret
+  d4(op: i64):
+    %lo = icmp.sge i64 op, 27
+    %hi = icmp.sle i64 op, 33
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, fp(), d5(op)
+  fp():
+    call void x_fp()
+    ret
+  d5(op: i64):
+    %is34 = icmp.eq i64 op, 34
+    condbr %is34, fcmp(), d6(op)
+  fcmp():
+    call void x_fcmp()
+    ret
+  d6(op: i64):
+    %lo = icmp.sge i64 op, 35
+    %hi = icmp.sle i64 op, 36
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, fconv(), d7(op)
+  fconv():
+    call void x_fconv()
+    ret
+  d7(op: i64):
+    %lo = icmp.sge i64 op, 37
+    %hi = icmp.sle i64 op, 38
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, f2i(), d8(op)
+  f2i():
+    call void x_f2i()
+    ret
+  d8(op: i64):
+    %lo = icmp.sge i64 op, 39
+    %hi = icmp.sle i64 op, 41
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, i2f(op), d9(op)
+  i2f(op: i64):
+    %is41 = icmp.eq i64 op, 41
+    condbr %is41, copy(), i2fgo()
+  i2fgo():
+    call void x_i2f()
+    ret
+  d9(op: i64):
+    %lo = icmp.sge i64 op, 42
+    %hi = icmp.sle i64 op, 48
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, mem(), d10(op)
+  mem():
+    call void x_mem()
+    ret
+  d10(op: i64):
+    %is68 = icmp.eq i64 op, 68
+    condbr %is68, brh(), d11(op)
+  brh():
+    call void x_br()
+    ret
+  d11(op: i64):
+    %is69 = icmp.eq i64 op, 69
+    condbr %is69, cbr(), d12(op)
+  cbr():
+    call void x_condbr()
+    ret
+  d12(op: i64):
+    %is70 = icmp.eq i64 op, 70
+    condbr %is70, reth(), d13(op)
+  reth():
+    call void x_ret()
+    ret
+  d13(op: i64):
+    %lo = icmp.sge i64 op, 71
+    %hi = icmp.sle i64 op, 72
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, callh(), d14(op)
+  callh():
+    call void x_call()
+    ret
+  d14(op: i64):
+    %is73 = icmp.eq i64 op, 73
+    condbr %is73, sel(), d15(op)
+  sel():
+    call void x_select()
+    ret
+  d15(op: i64):
+    %is74 = icmp.eq i64 op, 74
+    condbr %is74, asm(), bad()
+  asm():
+    call void adv_pc()
+    ret
+  bad():
+    call void fault(94)
+    ret
+}
+
+fn mod_exec() -> void {
+  entry():
+    %A = call i64 ld64(45824)
+    %mna = add i64 %A, 64
+    %mn = call i64 mload(%mna)
+    %rec = call i64 funrec(%mn)
+    %b32 = add i64 %rec, 32
+    %blk0 = call i64 mload(%b32)
+    %n48 = add i64 %rec, 48
+    %nv = call i64 mload(%n48)
+    %foa = add i64 %A, 80
+    %fo = call i64 mload(%foa)
+    call void st64(45864, %fo)
+    call void fst(0, %mn)
+    call void fst(8, %blk0)
+    call void fst(16, 0)
+    %voa = add i64 %A, 88
+    %vo = call i64 mload(%voa)
+    call void fst(24, %vo)
+    call void fst(32, -1)
+    %nv8 = shl i64 %nv, 3
+    %nb = add i64 %vo, %nv8
+    call void st64(45872, %nb)
+    %be = call i64 mload(%A)
+    %bea = add i64 %A, 72
+    %bend = call i64 mload(%bea)
+    call void st64(45880, %bend)
+    call void st64(45840, 0)
+    call void st64(45848, 0)
+    br loop()
+  loop():
+    %st = call i64 ld64(45848)
+    %run = icmp.eq i64 %st, 0
+    condbr %run, step(), fin()
+  step():
+    call void exec_step()
+    %s = call i64 ld64(45840)
+    %s2 = add i64 %s, 1
+    call void st64(45840, %s2)
+    %over = icmp.sgt i64 %s2, 100000000
+    condbr %over, budget(), loop()
+  budget():
+    call void st64(45848, 2)
+    call void st64(45856, 90)
+    br loop()
+  fin():
+    ret
+}
+
+; shell: run <index>
+fn cmd_run(ptr) -> void {
+  entry(rest: ptr):
+    %e1 = iconst i64 1
+    %e10 = iconst i64 10
+    %e45856 = iconst i64 45856
+    %p = bitcast i64 rest
+    br skipsp(%p)
+  skipsp(p: i64):
+    %c = call i64 mload8(p)
+    %sp = icmp.eq i64 %c, 32
+    condbr %sp, next(p), parse(p, 0, 0)
+  next(p: i64):
+    %p2 = add i64 p, 1
+    br skipsp(%p2)
+  parse(p: i64, acc: i64, any: i64):
+    %c = call i64 mload8(p)
+    %lo = icmp.sge i64 %c, 48
+    %hi = icmp.sle i64 %c, 57
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, dig(p, acc, any), have(acc, any)
+  dig(p: i64, acc: i64, any: i64):
+    %c = call i64 mload8(p)
+    %d = sub i64 %c, 48
+    %a10 = mul i64 acc, 10
+    %a2 = add i64 %a10, %d
+    %p2 = add i64 p, 1
+    br parse(%p2, %a2, 1)
+  have(acc: i64, any: i64):
+    %no = icmp.eq i64 any, 0
+    condbr %no, use(), chk(acc)
+  use():
+    %s = call ptr s_runuse()
+    call void con_write(%s)
+    ret
+  chk(idx: i64):
+    %cnt = call i64 ld64(45376)
+    %bad = icmp.sge i64 idx, %cnt
+    %neg = icmp.slt i64 idx, 0
+    %nz = zext i64 %bad
+    %nz2 = zext i64 %neg
+    %either = or i64 %nz, %nz2
+    %is = icmp.ne i64 %either, 0
+    condbr %is, nomod(), go(idx)
+  nomod():
+    %s = call ptr s_runno()
+    call void con_write(%s)
+    ret
+  go(idx: i64):
+    %pre = call ptr s_runpre()
+    call void con_write(%pre)
+    %toff = mul i64 idx, 32
+    %tp = add i64 45384, %toff
+    %np = add i64 %tp, 16
+    %name = call i64 mload(%np)
+    %np2 = bitcast ptr %name
+    call void con_write(%np2)
+    call void con_putc(10)
+    call void run_module(idx)
+    %st = call i64 ld64(45848)
+    %ok = icmp.eq i64 %st, 1
+    condbr %ok, ex(), fl()
+  ex():
+    %s = call ptr s_runexit()
+    call void con_write(%s)
+    %code = call i64 ld64(45856)
+    call void putu(%code)
+    call void con_putc(10)
+    ret
+  fl():
+    %s = call ptr s_runfault()
+    call void con_write(%s)
+    %code = call i64 ld64(45856)
+    call void putu(%code)
+    call void con_putc(10)
+    ret
+}

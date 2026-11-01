@@ -824,9 +824,73 @@ fn exec_line() -> void {
     %c = call ptr s_cecho()
     %m = call i64 match(line, wlen, %c)
     %hit = icmp.ne i64 %m, 0
-    condbr %hit, doecho(rest), dno(line, wlen)
+    condbr %hit, doecho(rest), d10(line, wlen, rest)
   doecho(rest: ptr):
     call void cmd_echo(rest)
+    ret
+  d10(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cheap()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, doheap(), d11(line, wlen, rest)
+  doheap():
+    call void cmd_heap()
+    ret
+  d11(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_chtest()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dohtest(), d12(line, wlen, rest)
+  dohtest():
+    call void cmd_htest()
+    ret
+  d12(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cmods()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, domods(), d13(line, wlen, rest)
+  domods():
+    call void cmd_mods()
+    ret
+  d13(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_crun()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dorun(rest), d14(line, wlen, rest)
+  dorun(rest: ptr):
+    call void cmd_run(rest)
+    ret
+  d14(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cdir()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dodir(), d15(line, wlen, rest)
+  dodir():
+    call void cmd_dir()
+    ret
+  d15(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_ccat()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, docat(rest), d16(line, wlen, rest)
+  docat(rest: ptr):
+    call void cmd_cat(rest)
+    ret
+  d16(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cstore()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dostore(rest), d17(line, wlen, rest)
+  dostore(rest: ptr):
+    call void cmd_store(rest)
+    ret
+  d17(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cping()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, doping(), dno(line, wlen)
+  doping():
+    call void cmd_ping()
     ret
   dno(line: ptr, wlen: i64):
     %empty = icmp.eq i64 wlen, 0
@@ -995,6 +1059,8 @@ fn main(i32, ptr) -> i32 {
     call void con_putc(10)
     br boot2(mbi)
   boot2(mbi: ptr):
+    %mba = bitcast i64 mbi
+    call void st64(49300, %mba)
     call void pmm_init(mbi)
     %bp = call ptr s_bootpfx()
     call void con_write(%bp)
@@ -1011,6 +1077,98 @@ fn main(i32, ptr) -> i32 {
     %tot = call i64 ld64(480)
     call void putu(%tot)
     call void con_putc(10)
+    call void mods_init(mbi)
+    %mo = call ptr s_modok()
+    call void con_write(%mo)
+    %mc = call i64 ld64(45376)
+    call void putu(%mc)
+    call void con_putc(10)
+    call void heap_init()
+    %hr = call ptr s_heapr()
+    call void con_write(%hr)
+    call void putu(1048576)
+    %hb = call ptr s_heaprb()
+    call void con_write(%hb)
+    %hbase = call i64 ld64(45064)
+    call void putu(%hbase)
+    call void con_putc(10)
+    call void fs_init()
+    %fp = call ptr s_fsdisk()
+    call void con_write(%fp)
+    %fsp = call i64 ld64(49152)
+    %fno = icmp.eq i64 %fsp, 0
+    condbr %fno, fsnone(), fsshow()
+  fsnone():
+    %fn = call ptr s_fsnone()
+    call void con_write(%fn)
+    br fsdone()
+  fsshow():
+    %fk = call ptr s_fskfs()
+    call void con_write(%fk)
+    %fc = call i64 ld64(49176)
+    call void putu(%fc)
+    %ff = call ptr s_fsfiles()
+    call void con_write(%ff)
+    %ft = call i64 ld64(49160)
+    %fb = call i64 ld64(49168)
+    %ffr = sub i64 %ft, %fb
+    call void putu(%ffr)
+    %fe = call ptr s_fsfree()
+    call void con_write(%fe)
+    br fsdone()
+  fsdone():
+    %mbv = call i64 ld64(49300)
+    %mbp = bitcast ptr %mbv
+    call void fb_init(%mbp)
+    %dp = call ptr s_fbpre()
+    call void con_write(%dp)
+    %dsp = call i64 ld64(77824)
+    %dno = icmp.eq i64 %dsp, 0
+    condbr %dno, dbnone(), dbshow()
+  dbnone():
+    %dn = call ptr s_fsnone()
+    call void con_write(%dn)
+    br dbdone()
+  dbshow():
+    %dw = call i64 ld64(77848)
+    call void putu(%dw)
+    %dx = call ptr s_fbx()
+    call void con_write(%dx)
+    %dh = call i64 ld64(77856)
+    call void putu(%dh)
+    %db = call ptr s_fbbpp()
+    call void con_write(%db)
+    %dc = call i64 ld64(77864)
+    call void putu(%dc)
+    %dx2 = call ptr s_fbcols()
+    call void con_write(%dx2)
+    %dr = call i64 ld64(77872)
+    call void putu(%dr)
+    %de = call ptr s_fbend()
+    call void con_write(%de)
+    br dbdone()
+  dbdone():
+    call void net_init()
+    %np = call ptr s_netpre()
+    call void con_write(%np)
+    %nsp = call i64 ld64(53248)
+    %nno = icmp.eq i64 %nsp, 0
+    condbr %nno, nbnone(), nbshow()
+  nbnone():
+    %nn = call ptr s_fsnone()
+    call void con_write(%nn)
+    br nbdone()
+  nbshow():
+    %nm = call ptr s_netmac()
+    call void con_write(%nm)
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %ma = add i64 %bp, 53264
+    call void print_mac(%ma)
+    %ni = call ptr s_netip()
+    call void con_write(%ni)
+    br nbdone()
+  nbdone():
     call void idt_init()
     call void pic_init()
     call void pit_init()

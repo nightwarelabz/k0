@@ -1,0 +1,29 @@
+data d_msg: i8 = { 102, 105, 98, 40, 50, 48, 41, 32, 61, 32, 0 }
+extern kprint(ptr) -> void
+extern kputn(i64) -> void
+extern kputc(i64) -> void
+
+fn fib(i64) -> i64 {
+  entry(n: i64):
+    %s = icmp.slt i64 n, 2
+    condbr %s, base(n), rec(n)
+  base(n: i64):
+    ret n
+  rec(n: i64):
+    %a = sub i64 n, 1
+    %b = sub i64 n, 2
+    %fa = call i64 fib(%a)
+    %fb = call i64 fib(%b)
+    %r = add i64 %fa, %fb
+    ret %r
+}
+
+fn main() -> i32 {
+  entry():
+    %m = dataptr 0
+    call void kprint(%m)
+    %r = call i64 fib(20)
+    call void kputn(%r)
+    call void kputc(10)
+    ret 0
+}

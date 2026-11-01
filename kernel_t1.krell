@@ -6,8 +6,10 @@
 ; compiled by krellc to native x86_64 and linked freestanding
 ; against boot.s.
 ;
-; The machine layer is eight services wide (boot.s):
-;   k_out8, k_in8          port I/O
+; The machine layer is twelve services wide (boot.s):
+;   k_out8, k_in8          port I/O, byte
+;   k_out16, k_in16        port I/O, word
+;   k_out32, k_in32        port I/O, dword
 ;   k_lidt                 load the interrupt table register
 ;   k_sti, k_cli, k_hlt    interrupt control
 ;   k_stub_base            the interrupt stub table address
@@ -29,11 +31,21 @@
 ;   0x1000 physical memory bitmap, 16 KiB (512 MiB of frames)
 ;   0x8000 the IDT, 4 KiB     0x9000 the IDTR
 ;   0xA000 scratch (decimal digits)
+;   0xB000 heap state (t3)    0xB100 module table (t3)
+;   0xB300 runner instance (t3)
+;   0xC000 ATA/FS state (t4)  0xC200 sector buffer, 512 bytes
+;   0xD000 net state (t6)     0xD100 e1000 descriptor rings
+;   0xE000 e1000 packet buffers (to 0x13000)
+;   0x13000 framebuffer state (t5)
 
 @@DATA@@
 
 extern k_out8(i32, i32) -> void
 extern k_in8(i32) -> i32
+extern k_out16(i32, i32) -> void
+extern k_in16(i32) -> i32
+extern k_out32(i32, i32) -> void
+extern k_in32(i32) -> i32
 extern k_lidt(ptr) -> void
 extern k_sti() -> void
 extern k_cli() -> void
@@ -259,6 +271,13 @@ fn con_putc_a(i64, i64) -> void {
 fn con_putc(i64) -> void {
   entry(c: i64):
     call void ser_putc(c)
+    %fb = call i64 ld64(77824)
+    %on = icmp.eq i64 %fb, 1
+    condbr %on, fb(c), vga(c)
+  fb(c: i64):
+    call void fb_putc(c)
+    ret
+  vga(c: i64):
     call void con_putc_a(c, 7)
     ret
 }

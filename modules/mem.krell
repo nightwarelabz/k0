@@ -1,0 +1,42 @@
+data d_msg: i8 = { 115, 117, 109, 32, 111, 102, 32, 48, 46, 46, 57, 57, 32, 61, 32, 0 }
+extern kprint(ptr) -> void
+extern kputn(i64) -> void
+extern kputc(i64) -> void
+extern kalloc(i64) -> i64
+extern kfree(i64) -> void
+
+fn main() -> i32 {
+  entry():
+    %d8 = iconst i64 8
+    %d1 = iconst i64 1
+    %buf = call i64 kalloc(800)
+    br fill(%buf, 0)
+  fill(buf: i64, i: i64):
+    %done = icmp.sge i64 i, 100
+    condbr %done, sum(buf, 0, 0), fbody(buf, i)
+  fbody(buf: i64, i: i64):
+    %off = mul i64 i, 8
+    %a = add i64 buf, %off
+    %pp = bitcast ptr %a
+    store i64 %pp, i
+    %i2 = add i64 i, 1
+    br fill(buf, %i2)
+  sum(buf: i64, i: i64, acc: i64):
+    %done = icmp.sge i64 i, 100
+    condbr %done, fin(buf, acc), sbody(buf, i, acc)
+  sbody(buf: i64, i: i64, acc: i64):
+    %off = mul i64 i, 8
+    %a = add i64 buf, %off
+    %pp = bitcast ptr %a
+    %v = load i64, %pp
+    %a2 = add i64 acc, %v
+    %i2 = add i64 i, 1
+    br sum(buf, %i2, %a2)
+  fin(buf: i64, acc: i64):
+    %m = dataptr 0
+    call void kprint(%m)
+    call void kputn(acc)
+    call void kputc(10)
+    call void kfree(buf)
+    ret 3
+}
