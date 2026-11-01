@@ -45,6 +45,16 @@ interrupt through one Krell function, `k_dispatch`.
   `ps` shows each task's work counter.
 - **Shell**: `help about mem ticks ps alloc free clear echo`.
 
+## Test state
+
+![K0 running in QEMU](screen.png)
+
+K0 booted in QEMU (qemu-system-x86 8.2.2, 128 MiB), driven by the
+scripted session in drive.py. At the `ps` command the counters
+read: shell 8, clock 63, beat 911, spinner 638, after 60 s of
+uptime. The status bar is live: uptime, ticks, free frames and
+the spinner in the top-right corner.
+
 ## Build and run
 
 Needs the Krell toolchain (`krellc` from the Krell tree) and
