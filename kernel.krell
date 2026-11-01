@@ -1,0 +1,1789 @@
+; K0 - a kernel in pure Krell.
+;
+; Boot, console, serial, physical memory, interrupt dispatch,
+; the PIC and the PIT, the PS/2 keyboard, a cooperative
+; scheduler and a small shell: every line of it is Krell,
+; compiled by krellc to native x86_64 and linked freestanding
+; against boot.s.
+;
+; The machine layer is eight services wide (boot.s):
+;   k_out8, k_in8          port I/O
+;   k_lidt                 load the interrupt table register
+;   k_sti, k_cli, k_hlt    interrupt control
+;   k_stub_base            the interrupt stub table address
+;   k_arena_base           the 1 MiB kernel state arena
+; Everything else - including building the IDT itself, entry
+; by entry, in memory - is done here, in Krell.
+;
+; Kernel state lives in the arena at fixed byte offsets:
+;   0x0000 ticks (i64)        0x0008 seconds (i64)
+;   0x0010 cursor x (i64)     0x0018 cursor y (i64)
+;   0x0020 kbd head (i64)     0x0028 kbd tail (i64)
+;   0x0030 keyboard ring, 256 bytes
+;   0x0130 shell line buffer, 160 bytes
+;   0x01D0 line length (i64)  0x01D8 shift flag (i64)
+;   0x01E0 pmm total frames   0x01E8 pmm free frames
+;   0x01F0 RAM in KiB         0x01F8 last allocated frame
+;   0x0200 task table, 4 slots of 48 bytes:
+;          +0 period, +8 next due tick, +16 work, +24 state
+;   0x1000 physical memory bitmap, 16 KiB (512 MiB of frames)
+;   0x8000 the IDT, 4 KiB     0x9000 the IDTR
+;   0xA000 scratch (decimal digits)
+
+data d_bark0: i8 = { 75, 48, 0 }
+fn s_bark0() -> ptr {
+  entry():
+    %p = dataptr 0
+    ret %p
+}
+
+data d_barup: i8 = { 117, 112, 116, 105, 109, 101, 0 }
+fn s_barup() -> ptr {
+  entry():
+    %p = dataptr 1
+    ret %p
+}
+
+data d_barunit: i8 = { 115, 0 }
+fn s_barunit() -> ptr {
+  entry():
+    %p = dataptr 2
+    ret %p
+}
+
+data d_bartick: i8 = { 116, 105, 99, 107, 115, 0 }
+fn s_bartick() -> ptr {
+  entry():
+    %p = dataptr 3
+    ret %p
+}
+
+data d_barfree: i8 = { 102, 114, 101, 101, 32, 102, 114, 97, 109, 101, 115, 0 }
+fn s_barfree() -> ptr {
+  entry():
+    %p = dataptr 4
+    ret %p
+}
+
+data d_banner1: i8 = { 75, 48, 0 }
+fn s_banner1() -> ptr {
+  entry():
+    %p = dataptr 5
+    ret %p
+}
+
+data d_banner2: i8 = { 97, 32, 107, 101, 114, 110, 101, 108, 32, 105, 110, 32, 112, 117, 114, 101, 32, 75, 114, 101, 108, 108, 0 }
+fn s_banner2() -> ptr {
+  entry():
+    %p = dataptr 6
+    ret %p
+}
+
+data d_bootok: i8 = { 107, 48, 58, 32, 109, 117, 108, 116, 105, 98, 111, 111, 116, 32, 104, 97, 110, 100, 115, 104, 97, 107, 101, 32, 111, 107, 0 }
+fn s_bootok() -> ptr {
+  entry():
+    %p = dataptr 7
+    ret %p
+}
+
+data d_bootbad: i8 = { 107, 48, 58, 32, 110, 111, 32, 109, 117, 108, 116, 105, 98, 111, 111, 116, 32, 109, 97, 103, 105, 99, 59, 32, 99, 111, 110, 116, 105, 110, 117, 105, 110, 103, 32, 97, 110, 121, 119, 97, 121, 0 }
+fn s_bootbad() -> ptr {
+  entry():
+    %p = dataptr 8
+    ret %p
+}
+
+data d_bootpfx: i8 = { 107, 48, 58, 32, 0 }
+fn s_bootpfx() -> ptr {
+  entry():
+    %p = dataptr 9
+    ret %p
+}
+
+data d_mema: i8 = { 112, 104, 121, 115, 105, 99, 97, 108, 32, 109, 101, 109, 111, 114, 121, 58, 32, 0 }
+fn s_mema() -> ptr {
+  entry():
+    %p = dataptr 10
+    ret %p
+}
+
+data d_memb: i8 = { 32, 75, 105, 66, 32, 124, 32, 102, 114, 97, 109, 101, 115, 32, 102, 114, 101, 101, 32, 0 }
+fn s_memb() -> ptr {
+  entry():
+    %p = dataptr 11
+    ret %p
+}
+
+data d_memc: i8 = { 32, 111, 102, 32, 0 }
+fn s_memc() -> ptr {
+  entry():
+    %p = dataptr 12
+    ret %p
+}
+
+data d_ints: i8 = { 107, 48, 58, 32, 105, 110, 116, 101, 114, 114, 117, 112, 116, 115, 32, 108, 105, 118, 101, 58, 32, 73, 68, 84, 32, 50, 53, 54, 32, 124, 32, 80, 73, 67, 32, 114, 101, 109, 97, 112, 112, 101, 100, 32, 124, 32, 80, 73, 84, 32, 49, 48, 48, 32, 72, 122, 0 }
+fn s_ints() -> ptr {
+  entry():
+    %p = dataptr 13
+    ret %p
+}
+
+data d_ready: i8 = { 107, 48, 58, 32, 115, 99, 104, 101, 100, 117, 108, 101, 114, 32, 114, 117, 110, 110, 105, 110, 103, 46, 32, 116, 121, 112, 101, 32, 104, 101, 108, 112, 46, 0 }
+fn s_ready() -> ptr {
+  entry():
+    %p = dataptr 14
+    ret %p
+}
+
+data d_prompt: i8 = { 107, 48, 62, 32, 0 }
+fn s_prompt() -> ptr {
+  entry():
+    %p = dataptr 15
+    ret %p
+}
+
+data d_help: i8 = { 99, 111, 109, 109, 97, 110, 100, 115, 58, 32, 104, 101, 108, 112, 32, 97, 98, 111, 117, 116, 32, 109, 101, 109, 32, 116, 105, 99, 107, 115, 32, 112, 115, 32, 97, 108, 108, 111, 99, 32, 102, 114, 101, 101, 32, 99, 108, 101, 97, 114, 32, 101, 99, 104, 111, 10, 32, 32, 97, 108, 108, 111, 99, 32, 32, 116, 97, 107, 101, 32, 97, 32, 52, 32, 75, 105, 66, 32, 102, 114, 97, 109, 101, 32, 97, 110, 100, 32, 119, 114, 105, 116, 101, 32, 97, 32, 116, 101, 115, 116, 32, 112, 97, 116, 116, 101, 114, 110, 10, 32, 32, 102, 114, 101, 101, 32, 32, 32, 103, 105, 118, 101, 32, 116, 104, 101, 32, 102, 114, 97, 109, 101, 32, 98, 97, 99, 107, 10, 32, 32, 112, 115, 32, 32, 32, 32, 32, 116, 104, 101, 32, 115, 99, 104, 101, 100, 117, 108, 101, 114, 32, 116, 97, 98, 108, 101, 32, 119, 105, 116, 104, 32, 119, 111, 114, 107, 32, 99, 111, 117, 110, 116, 101, 114, 115, 10, 0 }
+fn s_help() -> ptr {
+  entry():
+    %p = dataptr 16
+    ret %p
+}
+
+data d_about: i8 = { 75, 48, 58, 32, 98, 111, 111, 116, 44, 32, 99, 111, 110, 115, 111, 108, 101, 44, 32, 115, 101, 114, 105, 97, 108, 44, 32, 112, 104, 121, 115, 105, 99, 97, 108, 32, 109, 101, 109, 111, 114, 121, 44, 32, 105, 110, 116, 101, 114, 114, 117, 112, 116, 115, 44, 10, 107, 101, 121, 98, 111, 97, 114, 100, 44, 32, 115, 99, 104, 101, 100, 117, 108, 101, 114, 32, 97, 110, 100, 32, 115, 104, 101, 108, 108, 32, 45, 32, 97, 108, 108, 32, 119, 114, 105, 116, 116, 101, 110, 32, 105, 110, 32, 75, 114, 101, 108, 108, 46, 10, 84, 104, 101, 32, 109, 97, 99, 104, 105, 110, 101, 32, 108, 97, 121, 101, 114, 32, 105, 115, 32, 101, 105, 103, 104, 116, 32, 115, 101, 114, 118, 105, 99, 101, 115, 32, 105, 110, 32, 98, 111, 111, 116, 46, 115, 46, 10, 0 }
+fn s_about() -> ptr {
+  entry():
+    %p = dataptr 17
+    ret %p
+}
+
+data d_unknown: i8 = { 117, 110, 107, 110, 111, 119, 110, 32, 99, 111, 109, 109, 97, 110, 100, 58, 32, 0 }
+fn s_unknown() -> ptr {
+  entry():
+    %p = dataptr 18
+    ret %p
+}
+
+data d_exc: i8 = { 69, 88, 67, 69, 80, 84, 73, 79, 78, 32, 118, 101, 99, 116, 111, 114, 32, 0 }
+fn s_exc() -> ptr {
+  entry():
+    %p = dataptr 19
+    ret %p
+}
+
+data d_halt: i8 = { 32, 45, 32, 104, 97, 108, 116, 101, 100, 0 }
+fn s_halt() -> ptr {
+  entry():
+    %p = dataptr 20
+    ret %p
+}
+
+data d_ticksa: i8 = { 116, 105, 99, 107, 115, 32, 0 }
+fn s_ticksa() -> ptr {
+  entry():
+    %p = dataptr 21
+    ret %p
+}
+
+data d_ticksb: i8 = { 32, 124, 32, 117, 112, 116, 105, 109, 101, 32, 0 }
+fn s_ticksb() -> ptr {
+  entry():
+    %p = dataptr 22
+    ret %p
+}
+
+data d_pshdr: i8 = { 116, 97, 115, 107, 115, 32, 40, 119, 111, 114, 107, 32, 99, 111, 117, 110, 116, 101, 114, 115, 41, 58, 10, 0 }
+fn s_pshdr() -> ptr {
+  entry():
+    %p = dataptr 23
+    ret %p
+}
+
+data d_t0: i8 = { 115, 104, 101, 108, 108, 0 }
+fn s_t0() -> ptr {
+  entry():
+    %p = dataptr 24
+    ret %p
+}
+
+data d_t1: i8 = { 99, 108, 111, 99, 107, 0 }
+fn s_t1() -> ptr {
+  entry():
+    %p = dataptr 25
+    ret %p
+}
+
+data d_t2: i8 = { 98, 101, 97, 116, 0 }
+fn s_t2() -> ptr {
+  entry():
+    %p = dataptr 26
+    ret %p
+}
+
+data d_t3: i8 = { 115, 112, 105, 110, 110, 101, 114, 0 }
+fn s_t3() -> ptr {
+  entry():
+    %p = dataptr 27
+    ret %p
+}
+
+data d_alloca: i8 = { 102, 114, 97, 109, 101, 32, 97, 116, 32, 0 }
+fn s_alloca() -> ptr {
+  entry():
+    %p = dataptr 28
+    ret %p
+}
+
+data d_allocb: i8 = { 32, 45, 32, 112, 97, 116, 116, 101, 114, 110, 32, 118, 101, 114, 105, 102, 105, 101, 100, 10, 0 }
+fn s_allocb() -> ptr {
+  entry():
+    %p = dataptr 29
+    ret %p
+}
+
+data d_allocbad: i8 = { 32, 45, 32, 80, 65, 84, 84, 69, 82, 78, 32, 77, 73, 83, 77, 65, 84, 67, 72, 10, 0 }
+fn s_allocbad() -> ptr {
+  entry():
+    %p = dataptr 30
+    ret %p
+}
+
+data d_allocnone: i8 = { 97, 108, 108, 111, 99, 58, 32, 110, 111, 32, 102, 114, 101, 101, 32, 102, 114, 97, 109, 101, 115, 10, 0 }
+fn s_allocnone() -> ptr {
+  entry():
+    %p = dataptr 31
+    ret %p
+}
+
+data d_freeda: i8 = { 102, 114, 101, 101, 100, 32, 102, 114, 97, 109, 101, 32, 97, 116, 32, 0 }
+fn s_freeda() -> ptr {
+  entry():
+    %p = dataptr 32
+    ret %p
+}
+
+data d_freenone: i8 = { 102, 114, 101, 101, 58, 32, 110, 111, 116, 104, 105, 110, 103, 32, 116, 111, 32, 102, 114, 101, 101, 10, 0 }
+fn s_freenone() -> ptr {
+  entry():
+    %p = dataptr 33
+    ret %p
+}
+
+data d_chelp: i8 = { 104, 101, 108, 112, 0 }
+fn s_chelp() -> ptr {
+  entry():
+    %p = dataptr 34
+    ret %p
+}
+
+data d_cabout: i8 = { 97, 98, 111, 117, 116, 0 }
+fn s_cabout() -> ptr {
+  entry():
+    %p = dataptr 35
+    ret %p
+}
+
+data d_cmem: i8 = { 109, 101, 109, 0 }
+fn s_cmem() -> ptr {
+  entry():
+    %p = dataptr 36
+    ret %p
+}
+
+data d_cticks: i8 = { 116, 105, 99, 107, 115, 0 }
+fn s_cticks() -> ptr {
+  entry():
+    %p = dataptr 37
+    ret %p
+}
+
+data d_cps: i8 = { 112, 115, 0 }
+fn s_cps() -> ptr {
+  entry():
+    %p = dataptr 38
+    ret %p
+}
+
+data d_calloc: i8 = { 97, 108, 108, 111, 99, 0 }
+fn s_calloc() -> ptr {
+  entry():
+    %p = dataptr 39
+    ret %p
+}
+
+data d_cfree: i8 = { 102, 114, 101, 101, 0 }
+fn s_cfree() -> ptr {
+  entry():
+    %p = dataptr 40
+    ret %p
+}
+
+data d_cclear: i8 = { 99, 108, 101, 97, 114, 0 }
+fn s_cclear() -> ptr {
+  entry():
+    %p = dataptr 41
+    ret %p
+}
+
+data d_cecho: i8 = { 101, 99, 104, 111, 0 }
+fn s_cecho() -> ptr {
+  entry():
+    %p = dataptr 42
+    ret %p
+}
+
+data d_spin: i8 = { 124, 47, 45, 92 }
+fn s_spin() -> ptr {
+  entry():
+    %p = dataptr 43
+    ret %p
+}
+
+data d_tab1: i8 = { 0, 0, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 45, 61, 0, 0, 113, 119, 101, 114, 116, 121, 117, 105, 111, 112, 91, 93, 0, 0, 97, 115, 100, 102, 103, 104, 106, 107, 108, 59, 39, 96, 0, 92, 122, 120, 99, 118, 98, 110, 109, 44, 46, 47, 0, 0, 0, 32 }
+fn s_tab1() -> ptr {
+  entry():
+    %p = dataptr 44
+    ret %p
+}
+
+data d_tab2: i8 = { 0, 0, 33, 64, 35, 36, 37, 94, 38, 42, 40, 41, 95, 43, 0, 0, 81, 87, 69, 82, 84, 89, 85, 73, 79, 80, 123, 125, 0, 0, 65, 83, 68, 70, 71, 72, 74, 75, 76, 58, 34, 126, 0, 124, 90, 88, 67, 86, 66, 78, 77, 60, 62, 63, 0, 0, 0, 32 }
+fn s_tab2() -> ptr {
+  entry():
+    %p = dataptr 45
+    ret %p
+}
+
+
+extern k_out8(i32, i32) -> void
+extern k_in8(i32) -> i32
+extern k_lidt(ptr) -> void
+extern k_sti() -> void
+extern k_cli() -> void
+extern k_hlt() -> void
+extern k_stub_base() -> i64
+extern k_arena_base() -> i64
+
+; ---- arena access ---------------------------------------------
+
+fn ks() -> ptr {
+  entry():
+    %a = call i64 k_arena_base()
+    %p = bitcast ptr %a
+    ret %p
+}
+
+fn ksf(i64) -> ptr {
+  entry(off: i64):
+    %b = call ptr ks()
+    %p = gep i8 %b, off
+    ret %p
+}
+
+fn ld64(i64) -> i64 {
+  entry(off: i64):
+    %p = call ptr ksf(off)
+    %v = load i64, %p
+    ret %v
+}
+
+fn st64(i64, i64) -> void {
+  entry(off: i64, v: i64):
+    %p = call ptr ksf(off)
+    store i64 %p, v
+    ret
+}
+
+fn zero_range(i64, i64) -> void {
+  entry(off: i64, n: i64):
+    br loop(0, off, n)
+  loop(i: i64, off: i64, n: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(i, off, n)
+  body(i: i64, off: i64, n: i64):
+    %o = add i64 off, i
+    %p = call ptr ksf(%o)
+    store i8 %p, 0
+    %i2 = add i64 i, 1
+    br loop(%i2, off, n)
+  fin():
+    ret
+}
+
+; ---- serial (COM1, polled) -------------------------------------
+
+fn ser_init() -> void {
+  entry():
+    call void k_out8(0x3f9, 0)
+    call void k_out8(0x3fb, 128)
+    call void k_out8(0x3f8, 1)
+    call void k_out8(0x3f9, 0)
+    call void k_out8(0x3fb, 3)
+    call void k_out8(0x3fa, 199)
+    call void k_out8(0x3fc, 11)
+    ret
+}
+
+fn ser_putc(i64) -> void {
+  entry(c: i64):
+    br poll(c)
+  poll(c: i64):
+    %lsr = call i32 k_in8(0x3fd)
+    %v = zext i64 %lsr
+    %rdy = and i64 %v, 32
+    %ok = icmp.ne i64 %rdy, 0
+    condbr %ok, send(c), poll(c)
+  send(c: i64):
+    %b = trunc i32 c
+    call void k_out8(0x3f8, %b)
+    ret
+}
+
+; ---- VGA text console -------------------------------------------
+
+fn cellptr(i64, i64) -> ptr {
+  entry(x: i64, y: i64):
+    %row = mul i64 y, 80
+    %idx = add i64 %row, x
+    %off = mul i64 %idx, 2
+    %addr = add i64 753664, %off
+    %p = bitcast ptr %addr
+    ret %p
+}
+
+fn cell_write(i64, i64, i64, i64) -> void {
+  entry(x: i64, y: i64, ch: i64, attr: i64):
+    %p = call ptr cellptr(x, y)
+    %a8 = shl i64 attr, 8
+    %v = or i64 %a8, ch
+    %v16 = trunc i16 %v
+    store i16 %p, %v16
+    ret
+}
+
+fn cursor_update() -> void {
+  entry():
+    %x = call i64 ld64(16)
+    %y = call i64 ld64(24)
+    %row = mul i64 %y, 80
+    %pos = add i64 %row, %x
+    %lo = and i64 %pos, 255
+    %lo32 = trunc i32 %lo
+    call void k_out8(0x3d4, 15)
+    call void k_out8(0x3d5, %lo32)
+    %hi = lshr i64 %pos, 8
+    %hi2 = and i64 %hi, 255
+    %hi32 = trunc i32 %hi2
+    call void k_out8(0x3d4, 14)
+    call void k_out8(0x3d5, %hi32)
+    ret
+}
+
+fn scroll() -> void {
+  entry():
+    %e0 = iconst i64 0
+    %e80 = iconst i64 80
+    %e24 = iconst i64 24
+    br rows(1)
+  rows(y: i64):
+    %done = icmp.sge i64 y, 24
+    condbr %done, clr(), copy(y)
+  copy(y: i64):
+    br cells(y, 0)
+  cells(y: i64, x: i64):
+    %done = icmp.sge i64 x, 80
+    condbr %done, next(y), one(y, x)
+  one(y: i64, x: i64):
+    %y1 = add i64 y, 1
+    %src = call ptr cellptr(x, %y1)
+    %v = load i16, %src
+    %dst = call ptr cellptr(x, y)
+    store i16 %dst, %v
+    %x2 = add i64 x, 1
+    br cells(y, %x2)
+  next(y: i64):
+    %y2 = add i64 y, 1
+    br rows(%y2)
+  clr():
+    br clrc(0)
+  clrc(x: i64):
+    %done = icmp.sge i64 x, 80
+    condbr %done, fin(), cone(x)
+  cone(x: i64):
+    call void cell_write(x, 24, 32, 7)
+    %x2 = add i64 x, 1
+    br clrc(%x2)
+  fin():
+    ret
+}
+
+fn con_putc_a(i64, i64) -> void {
+  entry(c: i64, attr: i64):
+    %e0 = iconst i64 0
+    %e1 = iconst i64 1
+    %e16 = iconst i64 16
+    %e24 = iconst i64 24
+    %isn = icmp.eq i64 c, 10
+    condbr %isn, nl(attr), chkcr(c, attr)
+  chkcr(c: i64, attr: i64):
+    %isc = icmp.eq i64 c, 13
+    condbr %isc, cr(attr), chkbs(c, attr)
+  cr(attr: i64):
+    call void st64(16, 0)
+    br tail(attr)
+  chkbs(c: i64, attr: i64):
+    %isb = icmp.eq i64 c, 8
+    condbr %isb, bs(attr), pr(c, attr)
+  bs(attr: i64):
+    %x = call i64 ld64(16)
+    %gt = icmp.sgt i64 %x, 0
+    condbr %gt, bsgo(%x, attr), tail(attr)
+  bsgo(x: i64, attr: i64):
+    %x2 = sub i64 %x, 1
+    call void st64(16, %x2)
+    %y = call i64 ld64(24)
+    call void cell_write(%x2, %y, 32, 7)
+    br tail(attr)
+  nl(attr: i64):
+    call void st64(16, 0)
+    %y = call i64 ld64(24)
+    %y2 = add i64 %y, 1
+    call void st64(24, %y2)
+    br maybescroll(attr)
+  pr(c: i64, attr: i64):
+    %x = call i64 ld64(16)
+    %y = call i64 ld64(24)
+    call void cell_write(%x, %y, c, attr)
+    %x2 = add i64 %x, 1
+    %wrap = icmp.sge i64 %x2, 80
+    condbr %wrap, wrap(attr), adv(%x2, attr)
+  adv(x: i64, attr: i64):
+    call void st64(16, x)
+    br tail(attr)
+  wrap(attr: i64):
+    call void st64(16, 0)
+    %y = call i64 ld64(24)
+    %y2 = add i64 %y, 1
+    call void st64(24, %y2)
+    br maybescroll(attr)
+  maybescroll(attr: i64):
+    %y = call i64 ld64(24)
+    %over = icmp.sgt i64 %y, 24
+    condbr %over, doscroll(attr), tail(attr)
+  doscroll(attr: i64):
+    call void scroll()
+    call void st64(24, 24)
+    br tail(attr)
+  tail(attr: i64):
+    call void cursor_update()
+    ret
+}
+
+fn con_putc(i64) -> void {
+  entry(c: i64):
+    call void ser_putc(c)
+    call void con_putc_a(c, 7)
+    ret
+}
+
+fn con_write(ptr) -> void {
+  entry(p: ptr):
+    br loop(p, 0)
+  loop(p: ptr, i: i64):
+    %a = gep i8 p, i
+    %b = load i8, %a
+    %v = zext i64 %b
+    %done = icmp.eq i64 %v, 0
+    condbr %done, fin(), body(p, i, %v)
+  body(p: ptr, i: i64, v: i64):
+    call void con_putc(v)
+    %i2 = add i64 i, 1
+    br loop(p, %i2)
+  fin():
+    ret
+}
+
+fn con_write_a(ptr, i64) -> void {
+  entry(p: ptr, attr: i64):
+    br loop(p, 0, attr)
+  loop(p: ptr, i: i64, attr: i64):
+    %a = gep i8 p, i
+    %b = load i8, %a
+    %v = zext i64 %b
+    %done = icmp.eq i64 %v, 0
+    condbr %done, fin(), body(p, i, attr, %v)
+  body(p: ptr, i: i64, attr: i64, v: i64):
+    call void ser_putc(v)
+    call void con_putc_a(v, attr)
+    %i2 = add i64 i, 1
+    br loop(p, %i2, attr)
+  fin():
+    ret
+}
+
+fn str_at(i64, i64, ptr, i64) -> void {
+  entry(x: i64, y: i64, p: ptr, attr: i64):
+    br loop(x, y, p, attr, 0)
+  loop(x: i64, y: i64, p: ptr, attr: i64, i: i64):
+    %a = gep i8 p, i
+    %b = load i8, %a
+    %v = zext i64 %b
+    %done = icmp.eq i64 %v, 0
+    condbr %done, fin(), body(x, y, p, attr, i, %v)
+  body(x: i64, y: i64, p: ptr, attr: i64, i: i64, v: i64):
+    %cx = add i64 x, i
+    call void cell_write(%cx, y, v, attr)
+    %i2 = add i64 i, 1
+    br loop(x, y, p, attr, %i2)
+  fin():
+    ret
+}
+
+; Decimal digits of v, written reversed into buf. Returns count.
+fn digits(i64, ptr) -> i64 {
+  entry(v: i64, buf: ptr):
+    br fill(v, 0, buf)
+  fill(v: i64, n: i64, buf: ptr):
+    %d = urem i64 v, 10
+    %ch = add i64 %d, 48
+    %a = gep i8 buf, n
+    %t = trunc i8 %ch
+    store i8 %a, %t
+    %q = udiv i64 v, 10
+    %n2 = add i64 n, 1
+    %more = icmp.ne i64 %q, 0
+    condbr %more, fill(%q, %n2, buf), fin(%n2)
+  fin(n: i64):
+    ret n
+}
+
+fn putu(i64) -> void {
+  entry(v: i64):
+    %buf = call ptr ksf(40960)
+    %n = call i64 digits(v, %buf)
+    br emit(%n, 0, %buf)
+  emit(n: i64, i: i64, buf: ptr):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(n, i, buf)
+  body(n: i64, i: i64, buf: ptr):
+    %nm1 = sub i64 n, 1
+    %j = sub i64 %nm1, i
+    %a = gep i8 buf, %j
+    %b = load i8, %a
+    %v = zext i64 %b
+    call void con_putc(%v)
+    %i2 = add i64 i, 1
+    br emit(n, %i2, buf)
+  fin():
+    ret
+}
+
+fn num_at(i64, i64, i64, i64) -> void {
+  entry(x: i64, y: i64, v: i64, attr: i64):
+    %buf = call ptr ksf(40960)
+    %n = call i64 digits(v, %buf)
+    br emit(x, y, %n, 0, %buf, attr)
+  emit(x: i64, y: i64, n: i64, i: i64, buf: ptr, attr: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(x, y, n, i, buf, attr)
+  body(x: i64, y: i64, n: i64, i: i64, buf: ptr, attr: i64):
+    %nm1 = sub i64 n, 1
+    %j = sub i64 %nm1, i
+    %a = gep i8 buf, %j
+    %b = load i8, %a
+    %v = zext i64 %b
+    %cx = add i64 x, i
+    call void cell_write(%cx, y, %v, attr)
+    %i2 = add i64 i, 1
+    br emit(x, y, n, %i2, buf, attr)
+  fin():
+    ret
+}
+
+fn fill_rows(i64, i64, i64) -> void {
+  entry(y0: i64, y1: i64, attr: i64):
+    %e1 = iconst i64 1
+    br rows(y0, y1, attr)
+  rows(y: i64, y1: i64, attr: i64):
+    %done = icmp.sgt i64 y, y1
+    condbr %done, fin(), cols(y, y1, attr, 0)
+  cols(y: i64, y1: i64, attr: i64, x: i64):
+    %done = icmp.sge i64 x, 80
+    condbr %done, next(y, y1, attr), one(y, y1, attr, x)
+  one(y: i64, y1: i64, attr: i64, x: i64):
+    call void cell_write(x, y, 32, attr)
+    %x2 = add i64 x, 1
+    br cols(y, y1, attr, %x2)
+  next(y: i64, y1: i64, attr: i64):
+    %y2 = add i64 y, 1
+    br rows(%y2, y1, attr)
+  fin():
+    ret
+}
+
+fn bar_paint() -> void {
+  entry():
+    call void fill_rows(0, 0, 31)
+    %t = call ptr s_bark0()
+    call void str_at(1, 0, %t, 31)
+    %u = call ptr s_barup()
+    call void str_at(5, 0, %u, 31)
+    %sec = call i64 ld64(8)
+    call void num_at(12, 0, %sec, 31)
+    %s = call ptr s_barunit()
+    call void str_at(19, 0, %s, 31)
+    %tk = call ptr s_bartick()
+    call void str_at(22, 0, %tk, 31)
+    %tv = call i64 ld64(0)
+    call void num_at(28, 0, %tv, 31)
+    %f = call ptr s_barfree()
+    call void str_at(38, 0, %f, 31)
+    %fv = call i64 ld64(488)
+    call void num_at(50, 0, %fv, 31)
+    ret
+}
+
+fn con_init() -> void {
+  entry():
+    call void fill_rows(0, 24, 7)
+    call void st64(16, 0)
+    call void st64(24, 1)
+    call void bar_paint()
+    call void cursor_update()
+    ret
+}
+
+fn clear_text() -> void {
+  entry():
+    call void fill_rows(1, 24, 7)
+    call void st64(16, 0)
+    call void st64(24, 1)
+    call void cursor_update()
+    ret
+}
+
+; ---- physical memory ---------------------------------------------
+
+fn rd32(i64) -> i64 {
+  entry(a: i64):
+    %p = bitcast ptr a
+    %v = load i32, %p
+    %r = zext i64 %v
+    ret %r
+}
+
+fn rd64(i64) -> i64 {
+  entry(a: i64):
+    %p = bitcast ptr a
+    %v = load i64, %p
+    ret %v
+}
+
+fn bm_ptr(i64) -> ptr {
+  entry(f: i64):
+    %w = lshr i64 f, 6
+    %b = call ptr ksf(4096)
+    %p = gep i64 %b, %w
+    ret %p
+}
+
+fn bm_test(i64) -> i64 {
+  entry(f: i64):
+    %p = call ptr bm_ptr(f)
+    %w = load i64, %p
+    %bit = and i64 f, 63
+    %m = shl i64 1, %bit
+    %t = and i64 %w, %m
+    %r = icmp.ne i64 %t, 0
+    %rv = zext i64 %r
+    ret %rv
+}
+
+fn bm_set(i64) -> void {
+  entry(f: i64):
+    %p = call ptr bm_ptr(f)
+    %w = load i64, %p
+    %bit = and i64 f, 63
+    %m = shl i64 1, %bit
+    %w2 = or i64 %w, %m
+    store i64 %p, %w2
+    ret
+}
+
+fn bm_clear(i64) -> void {
+  entry(f: i64):
+    %p = call ptr bm_ptr(f)
+    %w = load i64, %p
+    %bit = and i64 f, 63
+    %m = shl i64 1, %bit
+    %nm = xor i64 %m, -1
+    %w2 = and i64 %w, %nm
+    store i64 %p, %w2
+    ret
+}
+
+fn set_range(i64, i64) -> void {
+  entry(f0: i64, f1: i64):
+    br loop(f0, f1)
+  loop(f: i64, f1: i64):
+    %done = icmp.sge i64 f, f1
+    condbr %done, fin(), body(f, f1)
+  body(f: i64, f1: i64):
+    call void bm_set(f)
+    %f2 = add i64 f, 1
+    br loop(%f2, f1)
+  fin():
+    ret
+}
+
+fn clear_range(i64, i64) -> void {
+  entry(f0: i64, f1: i64):
+    %tot = call i64 ld64(480)
+    %c1 = icmp.sle i64 f1, %tot
+    %e1 = select i64 %c1, f1, %tot
+    %c0 = icmp.sle i64 f0, %e1
+    %s0 = select i64 %c0, f0, %e1
+    br loop(%s0, %e1)
+  loop(f: i64, f1: i64):
+    %done = icmp.sge i64 f, f1
+    condbr %done, fin(), body(f, f1)
+  body(f: i64, f1: i64):
+    call void bm_clear(f)
+    %f2 = add i64 f, 1
+    br loop(%f2, f1)
+  fin():
+    ret
+}
+
+fn count_free() -> i64 {
+  entry():
+    %tot = call i64 ld64(480)
+    br loop(0, %tot, 0)
+  loop(f: i64, tot: i64, acc: i64):
+    %done = icmp.sge i64 f, tot
+    condbr %done, fin(acc), body(f, tot, acc)
+  body(f: i64, tot: i64, acc: i64):
+    %u = call i64 bm_test(f)
+    %free = xor i64 %u, 1
+    %acc2 = add i64 acc, %free
+    %f2 = add i64 f, 1
+    br loop(%f2, tot, %acc2)
+  fin(acc: i64):
+    ret acc
+}
+
+fn pmm_fillw(i64) -> void {
+  entry(words: i64):
+    br loop(0, words)
+  loop(w: i64, words: i64):
+    %done = icmp.sge i64 w, words
+    condbr %done, fin(), body(w, words)
+  body(w: i64, words: i64):
+    %off = mul i64 w, 8
+    %o2 = add i64 4096, %off
+    %p = call ptr ksf(%o2)
+    store i64 %p, -1
+    %w2 = add i64 w, 1
+    br loop(%w2, words)
+  fin():
+    ret
+}
+
+fn pmm_walk(i64, i64) -> void {
+  entry(addr: i64, end: i64):
+    br loop(addr, end)
+  loop(addr: i64, end: i64):
+    %done = icmp.sge i64 addr, end
+    condbr %done, fin(), body(addr, end)
+  body(addr: i64, end: i64):
+    %a4 = add i64 addr, 4
+    %base = call i64 rd64(%a4)
+    %a12 = add i64 addr, 12
+    %len = call i64 rd64(%a12)
+    %a20 = add i64 addr, 20
+    %ty = call i64 rd32(%a20)
+    %size = call i64 rd32(addr)
+    %ist = icmp.eq i64 %ty, 1
+    condbr %ist, usable(addr, end, %base, %len, %size), skip(addr, end, %size)
+  usable(addr: i64, end: i64, base: i64, len: i64, size: i64):
+    %bend = add i64 base, len
+    %f0raw = add i64 base, 4095
+    %f0 = lshr i64 %f0raw, 12
+    %f1 = lshr i64 %bend, 12
+    call void clear_range(%f0, %f1)
+    br skip(addr, end, size)
+  skip(addr: i64, end: i64, size: i64):
+    %step = add i64 size, 4
+    %next = add i64 addr, %step
+    br loop(%next, end)
+  fin():
+    ret
+}
+
+fn pmm_init(ptr) -> void {
+  entry(mbi: ptr):
+    %ma = bitcast i64 mbi
+    %f4 = add i64 %ma, 4
+    %lower = call i64 rd32(%f4)
+    %f8 = add i64 %ma, 8
+    %upper = call i64 rd32(%f8)
+    %ramkb = add i64 %lower, %upper
+    call void st64(496, %ramkb)
+    %ab1 = add i64 1024, %upper
+    %bytes = mul i64 %ab1, 1024
+    %fr = lshr i64 %bytes, 12
+    %over = icmp.sgt i64 %fr, 131072
+    %frames = select i64 %over, 131072, %fr
+    call void st64(480, %frames)
+    call void zero_range(4096, 16384)
+    %wraw = add i64 %frames, 63
+    %words = lshr i64 %wraw, 6
+    call void pmm_fillw(%words)
+    %flags = call i64 rd32(%ma)
+    %has = and i64 %flags, 64
+    %ok = icmp.ne i64 %has, 0
+    condbr %ok, walk(%ma), reserve()
+  walk(ma: i64):
+    %f44 = add i64 ma, 44
+    %mlen = call i64 rd32(%f44)
+    %f48 = add i64 ma, 48
+    %maddr = call i64 rd32(%f48)
+    %mend = add i64 %maddr, %mlen
+    call void pmm_walk(%maddr, %mend)
+    br reserve()
+  reserve():
+    call void set_range(0, 1536)
+    call void st64(504, -1)
+    %free = call i64 count_free()
+    call void st64(488, %free)
+    ret
+}
+
+fn pmm_alloc() -> i64 {
+  entry():
+    %e1 = iconst i64 1
+    %tot = call i64 ld64(480)
+    br loop(1536, %tot)
+  loop(f: i64, tot: i64):
+    %done = icmp.sge i64 f, tot
+    condbr %done, none(), body(f, tot)
+  body(f: i64, tot: i64):
+    %u = call i64 bm_test(f)
+    %isfree = icmp.eq i64 %u, 0
+    condbr %isfree, take(f), next(f, tot)
+  next(f: i64, tot: i64):
+    %f2 = add i64 f, 1
+    br loop(%f2, tot)
+  take(f: i64):
+    call void bm_set(f)
+    %fr = call i64 ld64(488)
+    %fr2 = sub i64 %fr, 1
+    call void st64(488, %fr2)
+    %addr = shl i64 f, 12
+    ret %addr
+  none():
+    ret -1
+}
+
+fn pmm_free(i64) -> void {
+  entry(addr: i64):
+    %f = lshr i64 addr, 12
+    %u = call i64 bm_test(%f)
+    %was = icmp.eq i64 %u, 1
+    condbr %was, go(%f), fin()
+  go(f: i64):
+    call void bm_clear(f)
+    %fr = call i64 ld64(488)
+    %fr2 = add i64 %fr, 1
+    call void st64(488, %fr2)
+    br fin()
+  fin():
+    ret
+}
+
+; ---- interrupts ---------------------------------------------------
+
+fn idt_init() -> void {
+  entry():
+    %e2 = iconst i64 2
+    %base = call i64 k_stub_base()
+    %idt = call ptr ksf(32768)
+    br loop(0, %base, %idt)
+  loop(v: i64, base: i64, idt: ptr):
+    %done = icmp.sge i64 v, 256
+    condbr %done, fin(%base, idt), body(v, base, idt)
+  body(v: i64, base: i64, idt: ptr):
+    %lt = icmp.slt i64 v, 48
+    %sel = select i64 %lt, v, 48
+    %soff = mul i64 %sel, 16
+    %stub = add i64 base, %soff
+    %eoff = mul i64 v, 16
+    %e = gep i8 idt, %eoff
+    %lo = and i64 %stub, 65535
+    %lo16 = trunc i16 %lo
+    store i16 %e, %lo16
+    %e2 = gep i8 idt, %eoff
+    %e2b = gep i8 %e2, 2
+    store i16 %e2b, 8
+    %e4 = gep i8 idt, %eoff
+    %e4b = gep i8 %e4, 4
+    store i8 %e4b, 0
+    %e5 = gep i8 idt, %eoff
+    %e5b = gep i8 %e5, 5
+    store i8 %e5b, 142
+    %mid = lshr i64 %stub, 16
+    %midv = and i64 %mid, 65535
+    %mid16 = trunc i16 %midv
+    %e6 = gep i8 idt, %eoff
+    %e6b = gep i8 %e6, 6
+    store i16 %e6b, %mid16
+    %hi = lshr i64 %stub, 32
+    %hi32 = trunc i32 %hi
+    %e8 = gep i8 idt, %eoff
+    %e8b = gep i8 %e8, 8
+    store i32 %e8b, %hi32
+    %e12 = gep i8 idt, %eoff
+    %e12b = gep i8 %e12, 12
+    store i32 %e12b, 0
+    %v2 = add i64 v, 1
+    br loop(%v2, base, idt)
+  fin(base: i64, idt: ptr):
+    %idtr = call ptr ksf(36864)
+    store i16 %idtr, 4095
+    %b2 = gep i8 %idtr, 2
+    %ia = bitcast i64 idt
+    store i64 %b2, %ia
+    call void k_lidt(%idtr)
+    ret
+}
+
+fn pic_init() -> void {
+  entry():
+    call void k_out8(0x20, 0x11)
+    call void k_out8(0xa0, 0x11)
+    call void k_out8(0x21, 0x20)
+    call void k_out8(0xa1, 0x28)
+    call void k_out8(0x21, 0x04)
+    call void k_out8(0xa1, 0x02)
+    call void k_out8(0x21, 0x01)
+    call void k_out8(0xa1, 0x01)
+    call void k_out8(0x21, 0xfc)
+    call void k_out8(0xa1, 0xff)
+    ret
+}
+
+fn pit_init() -> void {
+  entry():
+    call void k_out8(0x43, 0x36)
+    call void k_out8(0x40, 0x9c)
+    call void k_out8(0x40, 0x2e)
+    ret
+}
+
+fn eoi(i64) -> void {
+  entry(vec: i64):
+    call void k_out8(0x20, 0x20)
+    %hi = icmp.sge i64 vec, 40
+    condbr %hi, slave(), fin()
+  slave():
+    call void k_out8(0xa0, 0x20)
+    br fin()
+  fin():
+    ret
+}
+
+fn k_dispatch(i64) -> void {
+  entry(vec: i64):
+    %e1 = iconst i64 1
+    %e48 = iconst i64 48
+    %exc = icmp.slt i64 vec, 32
+    condbr %exc, panic(vec), chk(vec)
+  chk(vec: i64):
+    %ist = icmp.eq i64 vec, 32
+    condbr %ist, tick(), chk2(vec)
+  chk2(vec: i64):
+    %isk = icmp.eq i64 vec, 33
+    condbr %isk, kbd(), other(vec)
+  other(vec: i64):
+    %isirq = icmp.slt i64 vec, 48
+    condbr %isirq, irqother(vec), fin()
+  irqother(vec: i64):
+    call void eoi(vec)
+    br fin()
+  fin():
+    ret
+  tick():
+    %t = call i64 ld64(0)
+    %t2 = add i64 %t, 1
+    call void st64(0, %t2)
+    %r = srem i64 %t2, 100
+    %sec = icmp.eq i64 %r, 0
+    condbr %sec, secup(), teoi()
+  secup():
+    %s = call i64 ld64(8)
+    %s2 = add i64 %s, 1
+    call void st64(8, %s2)
+    br teoi()
+  teoi():
+    call void eoi(32)
+    ret
+  kbd():
+    %sc = call i32 k_in8(0x60)
+    %v = zext i64 %sc
+    %head = call i64 ld64(32)
+    %h1 = add i64 %head, 1
+    %next = and i64 %h1, 255
+    %tail = call i64 ld64(40)
+    %full = icmp.eq i64 %next, %tail
+    condbr %full, keoi(), kstore(%v, %head, %next)
+  kstore(v: i64, head: i64, next: i64):
+    %off = add i64 48, head
+    %p = call ptr ksf(%off)
+    %b = trunc i8 v
+    store i8 %p, %b
+    call void st64(32, next)
+    br keoi()
+  keoi():
+    call void eoi(33)
+    ret
+  panic(vec: i64):
+    call void k_cli()
+    %m = call ptr s_exc()
+    call void con_write(%m)
+    call void putu(vec)
+    %h = call ptr s_halt()
+    call void con_write(%h)
+    call void con_putc(10)
+    br ploop()
+  ploop():
+    call void k_hlt()
+    br ploop()
+}
+
+; ---- tasks and the scheduler ----------------------------------------
+
+fn task_init(i64, i64) -> void {
+  entry(id: i64, period: i64):
+    %io = mul i64 id, 48
+    %b = add i64 512, %io
+    call void st64(%b, period)
+    %t = call i64 ld64(0)
+    %nx = add i64 %t, period
+    %b8 = add i64 %b, 8
+    call void st64(%b8, %nx)
+    %b16 = add i64 %b, 16
+    call void st64(%b16, 0)
+    %b24 = add i64 %b, 24
+    call void st64(%b24, 0)
+    ret
+}
+
+fn task_setup() -> void {
+  entry():
+    call void task_init(0, 0)
+    call void task_init(1, 100)
+    call void task_init(2, 7)
+    call void task_init(3, 10)
+    ret
+}
+
+fn clock_step() -> void {
+  entry():
+    call void bar_paint()
+    ret
+}
+
+fn beat_step() -> void {
+  entry():
+    ret
+}
+
+fn spin_step() -> void {
+  entry():
+    %idx = call i64 ld64(600)
+    %tab = call ptr s_spin()
+    %p = gep i8 %tab, %idx
+    %b = load i8, %p
+    %ch = zext i64 %b
+    call void cell_write(79, 0, %ch, 31)
+    %i2 = add i64 %idx, 1
+    %nx = and i64 %i2, 3
+    call void st64(600, %nx)
+    ret
+}
+
+fn task_due(i64) -> i64 {
+  entry(id: i64):
+    %io = mul i64 id, 48
+    %b = add i64 512, %io
+    %b8 = add i64 %b, 8
+    %nx = call i64 ld64(%b8)
+    %t = call i64 ld64(0)
+    %due = icmp.sge i64 %t, %nx
+    %r = zext i64 %due
+    ret %r
+}
+
+fn task_run(i64) -> void {
+  entry(id: i64):
+    %io = mul i64 id, 48
+    %b = add i64 512, %io
+    %is1 = icmp.eq i64 id, 1
+    condbr %is1, run1(%b), chk2(id, %b)
+  chk2(id: i64, b: i64):
+    %is2 = icmp.eq i64 id, 2
+    condbr %is2, run2(%b), chk3(id, %b)
+  chk3(id: i64, b: i64):
+    %is3 = icmp.eq i64 id, 3
+    condbr %is3, run3(%b), resched(%b)
+  run1(b: i64):
+    call void clock_step()
+    br resched(b)
+  run2(b: i64):
+    call void beat_step()
+    br resched(b)
+  run3(b: i64):
+    call void spin_step()
+    br resched(b)
+  resched(b: i64):
+    %b16 = add i64 b, 16
+    %w = call i64 ld64(%b16)
+    %w2 = add i64 %w, 1
+    call void st64(%b16, %w2)
+    %b8 = add i64 b, 8
+    %nx = call i64 ld64(%b8)
+    %per = call i64 ld64(b)
+    %cand = add i64 %nx, %per
+    %t = call i64 ld64(0)
+    %late = icmp.sle i64 %cand, %t
+    %fix = add i64 %t, %per
+    %fin = select i64 %late, %fix, %cand
+    call void st64(%b8, %fin)
+    ret
+}
+
+; ---- the shell ------------------------------------------------------
+
+fn kbd_getc() -> i64 {
+  entry():
+    %head = call i64 ld64(32)
+    %tail = call i64 ld64(40)
+    %empty = icmp.eq i64 %head, %tail
+    condbr %empty, none(), got(%tail)
+  none():
+    ret -1
+  got(tail: i64):
+    %off = add i64 48, tail
+    %p = call ptr ksf(%off)
+    %b = load i8, %p
+    %v = zext i64 %b
+    %t2 = add i64 tail, 1
+    %nt = and i64 %t2, 255
+    call void st64(40, %nt)
+    ret %v
+}
+
+fn prompt() -> void {
+  entry():
+    %p = call ptr s_prompt()
+    call void con_write(%p)
+    ret
+}
+
+fn putn(ptr, i64) -> void {
+  entry(p: ptr, n: i64):
+    br loop(p, n, 0)
+  loop(p: ptr, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(p, n, i)
+  body(p: ptr, n: i64, i: i64):
+    %a = gep i8 p, i
+    %b = load i8, %a
+    %v = zext i64 %b
+    call void con_putc(%v)
+    %i2 = add i64 i, 1
+    br loop(p, n, %i2)
+  fin():
+    ret
+}
+
+fn match(ptr, i64, ptr) -> i64 {
+  entry(lp: ptr, n: i64, cp: ptr):
+    %e0 = iconst i64 0
+    br loop(lp, n, cp, 0)
+  loop(lp: ptr, n: i64, cp: ptr, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, tailck(cp, n), body(lp, n, cp, i)
+  body(lp: ptr, n: i64, cp: ptr, i: i64):
+    %a = gep i8 lp, i
+    %x = load i8, %a
+    %b2 = gep i8 cp, i
+    %y = load i8, %b2
+    %eq = icmp.eq i8 %x, %y
+    condbr %eq, next(lp, n, cp, i), no()
+  next(lp: ptr, n: i64, cp: ptr, i: i64):
+    %i2 = add i64 i, 1
+    br loop(lp, n, cp, %i2)
+  tailck(cp: ptr, n: i64):
+    %a = gep i8 cp, n
+    %y = load i8, %a
+    %z = icmp.eq i8 %y, 0
+    %r = zext i64 %z
+    ret %r
+  no():
+    ret 0
+}
+
+fn name_of(i64) -> ptr {
+  entry(id: i64):
+    %i0 = icmp.eq i64 id, 0
+    condbr %i0, n0(), c1(id)
+  c1(id: i64):
+    %i1 = icmp.eq i64 id, 1
+    condbr %i1, n1(), c2(id)
+  c2(id: i64):
+    %i2 = icmp.eq i64 id, 2
+    condbr %i2, n2(), n3()
+  n0():
+    %p = call ptr s_t0()
+    ret %p
+  n1():
+    %p = call ptr s_t1()
+    ret %p
+  n2():
+    %p = call ptr s_t2()
+    ret %p
+  n3():
+    %p = call ptr s_t3()
+    ret %p
+}
+
+fn cmd_help() -> void {
+  entry():
+    %p = call ptr s_help()
+    call void con_write(%p)
+    ret
+}
+
+fn cmd_about() -> void {
+  entry():
+    %p = call ptr s_about()
+    call void con_write(%p)
+    ret
+}
+
+fn cmd_mem() -> void {
+  entry():
+    %a = call ptr s_mema()
+    call void con_write(%a)
+    %ram = call i64 ld64(496)
+    call void putu(%ram)
+    %b = call ptr s_memb()
+    call void con_write(%b)
+    %fr = call i64 ld64(488)
+    call void putu(%fr)
+    %c = call ptr s_memc()
+    call void con_write(%c)
+    %tot = call i64 ld64(480)
+    call void putu(%tot)
+    call void con_putc(10)
+    ret
+}
+
+fn cmd_ticks() -> void {
+  entry():
+    %a = call ptr s_ticksa()
+    call void con_write(%a)
+    %t = call i64 ld64(0)
+    call void putu(%t)
+    %b = call ptr s_ticksb()
+    call void con_write(%b)
+    %s = call i64 ld64(8)
+    call void putu(%s)
+    call void con_putc(115)
+    call void con_putc(10)
+    ret
+}
+
+fn cmd_ps() -> void {
+  entry():
+    %h = call ptr s_pshdr()
+    call void con_write(%h)
+    br loop(0)
+  loop(id: i64):
+    %done = icmp.sge i64 id, 4
+    condbr %done, fin(), body(id)
+  body(id: i64):
+    %nm = call ptr name_of(id)
+    call void con_write(%nm)
+    call void con_putc(32)
+    %io = mul i64 id, 48
+    %b = add i64 512, %io
+    %b16 = add i64 %b, 16
+    %w = call i64 ld64(%b16)
+    call void putu(%w)
+    call void con_putc(10)
+    %i2 = add i64 id, 1
+    br loop(%i2)
+  fin():
+    ret
+}
+
+fn cmd_alloc() -> void {
+  entry():
+    %f = call i64 pmm_alloc()
+    %none = icmp.eq i64 %f, -1
+    condbr %none, nof(), got(%f)
+  nof():
+    %m = call ptr s_allocnone()
+    call void con_write(%m)
+    ret
+  got(f: i64):
+    call void st64(504, f)
+    %p = bitcast ptr f
+    store i64 %p, 0x4b304b304b304b30
+    %v = load i64, %p
+    %a = call ptr s_alloca()
+    call void con_write(%a)
+    call void putu(f)
+    %ok = icmp.eq i64 %v, 0x4b304b304b304b30
+    condbr %ok, okm(), badm()
+  okm():
+    %m = call ptr s_allocb()
+    call void con_write(%m)
+    ret
+  badm():
+    %m = call ptr s_allocbad()
+    call void con_write(%m)
+    ret
+}
+
+fn cmd_free() -> void {
+  entry():
+    %f = call i64 ld64(504)
+    %none = icmp.eq i64 %f, -1
+    condbr %none, nof(), go(%f)
+  nof():
+    %m = call ptr s_freenone()
+    call void con_write(%m)
+    ret
+  go(f: i64):
+    call void pmm_free(f)
+    call void st64(504, -1)
+    %m = call ptr s_freeda()
+    call void con_write(%m)
+    call void putu(f)
+    call void con_putc(10)
+    ret
+}
+
+fn cmd_clear() -> void {
+  entry():
+    call void clear_text()
+    ret
+}
+
+fn cmd_echo(ptr) -> void {
+  entry(rest: ptr):
+    call void con_write(rest)
+    call void con_putc(10)
+    ret
+}
+
+fn exec_line() -> void {
+  entry():
+    %e1 = iconst i64 1
+    %w = call i64 ld64(528)
+    %w2 = add i64 %w, 1
+    call void st64(528, %w2)
+    %line = call ptr ksf(304)
+    %len = call i64 ld64(464)
+    %e = gep i8 %line, %len
+    store i8 %e, 0
+    br find(%line, %len, 0)
+  find(line: ptr, len: i64, i: i64):
+    %done = icmp.sge i64 i, len
+    condbr %done, whole(line, len), body(line, len, i)
+  body(line: ptr, len: i64, i: i64):
+    %a = gep i8 line, i
+    %b = load i8, %a
+    %sp = icmp.eq i8 %b, 32
+    condbr %sp, split(line, len, i), next(line, len, i)
+  next(line: ptr, len: i64, i: i64):
+    %i2 = add i64 i, 1
+    br find(line, len, %i2)
+  whole(line: ptr, len: i64):
+    %rest = gep i8 line, len
+    br disp(line, len, %rest)
+  split(line: ptr, len: i64, i: i64):
+    %r0 = add i64 i, 1
+    %rest = gep i8 line, %r0
+    br disp(line, i, %rest)
+  disp(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_chelp()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dohelp(), d2(line, wlen, rest)
+  dohelp():
+    call void cmd_help()
+    ret
+  d2(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cabout()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, doabout(), d3(line, wlen, rest)
+  doabout():
+    call void cmd_about()
+    ret
+  d3(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cmem()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, domem(), d4(line, wlen, rest)
+  domem():
+    call void cmd_mem()
+    ret
+  d4(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cticks()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, doticks(), d5(line, wlen, rest)
+  doticks():
+    call void cmd_ticks()
+    ret
+  d5(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cps()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dops(), d6(line, wlen, rest)
+  dops():
+    call void cmd_ps()
+    ret
+  d6(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_calloc()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, doalloc(), d7(line, wlen, rest)
+  doalloc():
+    call void cmd_alloc()
+    ret
+  d7(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cfree()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dofree(), d8(line, wlen, rest)
+  dofree():
+    call void cmd_free()
+    ret
+  d8(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cclear()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, doclear(), d9(line, wlen, rest)
+  doclear():
+    call void cmd_clear()
+    ret
+  d9(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cecho()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, doecho(rest), dno(line, wlen)
+  doecho(rest: ptr):
+    call void cmd_echo(rest)
+    ret
+  dno(line: ptr, wlen: i64):
+    %empty = icmp.eq i64 wlen, 0
+    condbr %empty, fin(), unk(line, wlen)
+  unk(line: ptr, wlen: i64):
+    %m = call ptr s_unknown()
+    call void con_write(%m)
+    call void putn(line, wlen)
+    call void con_putc(10)
+    br fin()
+  fin():
+    ret
+}
+
+; ---- entry ------------------------------------------------------------
+
+fn handle_sc(i64) -> void {
+  entry(sc: i64):
+    %e0 = iconst i64 0
+    %e1 = iconst i64 1
+    %e304 = iconst i64 304
+    %e464 = iconst i64 464
+    %e472 = iconst i64 472
+    %s1 = icmp.eq i64 sc, 42
+    condbr %s1, shon(), c2(sc)
+  c2(sc: i64):
+    %s2 = icmp.eq i64 sc, 54
+    condbr %s2, shon(), c3(sc)
+  c3(sc: i64):
+    %s3 = icmp.eq i64 sc, 170
+    condbr %s3, shoff(), c4(sc)
+  c4(sc: i64):
+    %s4 = icmp.eq i64 sc, 182
+    condbr %s4, shoff(), c5(sc)
+  c5(sc: i64):
+    %rel = icmp.sge i64 sc, 128
+    condbr %rel, fin(), c6(sc)
+  c6(sc: i64):
+    %ent = icmp.eq i64 sc, 28
+    condbr %ent, enter(), c7(sc)
+  c7(sc: i64):
+    %bk = icmp.eq i64 sc, 14
+    condbr %bk, bksp(), c8(sc)
+  c8(sc: i64):
+    %big = icmp.sge i64 sc, 58
+    condbr %big, fin(), type(sc)
+  shon():
+    call void st64(472, 1)
+    br fin()
+  shoff():
+    call void st64(472, 0)
+    br fin()
+  enter():
+    call void con_putc(10)
+    call void exec_line()
+    call void st64(464, 0)
+    call void prompt()
+    br fin()
+  bksp():
+    %len = call i64 ld64(464)
+    %has = icmp.sgt i64 %len, 0
+    condbr %has, bkgo(%len), fin()
+  bkgo(len: i64):
+    %l2 = sub i64 %len, 1
+    call void st64(464, %l2)
+    call void con_putc(8)
+    br fin()
+  type(sc: i64):
+    %sh = call i64 ld64(472)
+    %issh = icmp.ne i64 %sh, 0
+    condbr %issh, tshift(sc), tplain(sc)
+  tplain(sc: i64):
+    %tab = call ptr s_tab1()
+    br tgo(sc, %tab)
+  tshift(sc: i64):
+    %tab = call ptr s_tab2()
+    br tgo(sc, %tab)
+  tgo(sc: i64, tab: ptr):
+    %a = gep i8 tab, sc
+    %b = load i8, %a
+    %ch = zext i64 %b
+    %nz = icmp.ne i64 %ch, 0
+    condbr %nz, tstore(sc, %ch), fin()
+  tstore(sc: i64, ch: i64):
+    %len = call i64 ld64(464)
+    %room = icmp.slt i64 %len, 150
+    condbr %room, tput(%len, %ch), fin()
+  tput(len: i64, ch: i64):
+    %off = add i64 304, %len
+    %p = call ptr ksf(%off)
+    %tb = trunc i8 ch
+    store i8 %p, %tb
+    %l2 = add i64 %len, 1
+    call void st64(464, %l2)
+    call void con_putc(%ch)
+    br fin()
+  fin():
+    ret
+}
+
+fn shell_poll() -> void {
+  entry():
+    br loop()
+  loop():
+    %sc = call i64 kbd_getc()
+    %done = icmp.eq i64 %sc, -1
+    condbr %done, fin(), body(%sc)
+  body(sc: i64):
+    call void handle_sc(sc)
+    br loop()
+  fin():
+    ret
+}
+
+fn sched_pass() -> void {
+  entry():
+    call void shell_poll()
+    br loop(1)
+  loop(id: i64):
+    %done = icmp.sge i64 id, 4
+    condbr %done, fin(), body(id)
+  body(id: i64):
+    %due = call i64 task_due(id)
+    %is = icmp.ne i64 %due, 0
+    condbr %is, run(id), next(id)
+  run(id: i64):
+    call void task_run(id)
+    br next(id)
+  next(id: i64):
+    %i2 = add i64 id, 1
+    br loop(%i2)
+  fin():
+    ret
+}
+
+fn kernel_loop() -> void {
+  entry():
+    br loop()
+  loop():
+    call void sched_pass()
+    call void k_hlt()
+    br loop()
+}
+
+fn main(i32, ptr) -> i32 {
+  entry(argc: i32, mbi: ptr):
+    %enl = iconst i64 10
+    call void ser_init()
+    call void con_init()
+    %t = call ptr s_banner1()
+    call void con_write_a(%t, 11)
+    call void con_putc(10)
+    %s2 = call ptr s_banner2()
+    call void con_write(%s2)
+    call void con_putc(10)
+    %ok = icmp.eq i32 argc, 0x2badb002
+    condbr %ok, okb(mbi), badb(mbi)
+  okb(mbi: ptr):
+    %m = call ptr s_bootok()
+    call void con_write(%m)
+    call void con_putc(10)
+    br boot2(mbi)
+  badb(mbi: ptr):
+    %m = call ptr s_bootbad()
+    call void con_write(%m)
+    call void con_putc(10)
+    br boot2(mbi)
+  boot2(mbi: ptr):
+    call void pmm_init(mbi)
+    %bp = call ptr s_bootpfx()
+    call void con_write(%bp)
+    %a = call ptr s_mema()
+    call void con_write(%a)
+    %ram = call i64 ld64(496)
+    call void putu(%ram)
+    %b = call ptr s_memb()
+    call void con_write(%b)
+    %fr = call i64 ld64(488)
+    call void putu(%fr)
+    %c = call ptr s_memc()
+    call void con_write(%c)
+    %tot = call i64 ld64(480)
+    call void putu(%tot)
+    call void con_putc(10)
+    call void idt_init()
+    call void pic_init()
+    call void pit_init()
+    call void task_setup()
+    call void k_sti()
+    %i = call ptr s_ints()
+    call void con_write(%i)
+    call void con_putc(10)
+    %r = call ptr s_ready()
+    call void con_write(%r)
+    call void con_putc(10)
+    call void prompt()
+    call void kernel_loop()
+    ret 0
+}
