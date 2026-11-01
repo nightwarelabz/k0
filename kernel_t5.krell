@@ -1,0 +1,323 @@
+
+; K0 template part 5: display. A framebuffer text console over
+; the Multiboot linear framebuffer (32 bpp), in Krell. When a
+; framebuffer is present, con_putc routes here instead of the
+; VGA text console; the serial mirror is unaffected either way.
+; The glyphs are an 8x16 bitmap font (data blob "font", rendered
+; by gen_kernel.py from DejaVu Sans Mono, characters 32..127).
+; State (arena): 77824 present flag, 77832 address, 77840 pitch,
+; 77848 width, 77856 height, 77864 columns, 77872 rows,
+; 77880 cursor x, 77888 cursor y. The VGA status row is not
+; mirrored here; this console owns the whole framebuffer.
+
+; PCI configuration space access (mechanism 1) and the Bochs
+; VBE register interface. The network driver in part 6 uses
+; pci_read32 as well.
+fn pci_read32(i64, i64) -> i64 {
+  entry(dev: i64, reg: i64):
+    %a = lshr i64 dev, 0
+    %base = iconst i64 2147483648
+    %ds = shl i64 dev, 11
+    %r = and i64 reg, 252
+    %addr = or i64 %base, %ds
+    %addr2 = or i64 %addr, %r
+    %a32 = trunc i32 %addr2
+    call void k_out32(3320, %a32)
+    %v = call i32 k_in32(3324)
+    %r64 = zext i64 %v
+    ret %r64
+}
+
+fn vbe_write(i64, i64) -> void {
+  entry(idx: i64, val: i64):
+    %i32 = trunc i32 idx
+    call void k_out16(462, %i32)
+    %v32 = trunc i32 val
+    call void k_out16(463, %v32)
+    ret
+}
+
+; QEMU's Multiboot loader does not act on the header video
+; request, so when the Multiboot info carries no framebuffer,
+; set the mode through the Bochs VBE interface of the standard
+; VGA device instead: find it on PCI bus 0 by class, take the
+; linear framebuffer address from BAR0, program 1024x768x32.
+fn fb_bochs() -> void {
+  entry():
+    %e1 = iconst i64 1
+    br scan(0)
+  scan(dev: i64):
+    %over = icmp.sge i64 dev, 32
+    condbr %over, fin(), probe(dev)
+  probe(dev: i64):
+    %id = call i64 pci_read32(dev, 0)
+    %ven = and i64 %id, 65535
+    %none = icmp.eq i64 %ven, 65535
+    condbr %none, next(dev), cls(dev)
+  cls(dev: i64):
+    %c = call i64 pci_read32(dev, 8)
+    %cc = lshr i64 %c, 16
+    %cc2 = and i64 %cc, 65535
+    %vga = icmp.eq i64 %cc2, 768
+    condbr %vga, bar(dev), next(dev)
+  bar(dev: i64):
+    %b = call i64 pci_read32(dev, 16)
+    %addr = and i64 %b, -16
+    %no = icmp.eq i64 %addr, 0
+    condbr %no, next(dev), set(%addr)
+  set(addr: i64):
+    call void vbe_write(4, 0)
+    call void vbe_write(1, 1024)
+    call void vbe_write(2, 768)
+    call void vbe_write(3, 32)
+    %en = iconst i64 65
+    call void vbe_write(4, %en)
+    call void st64(77832, addr)
+    call void st64(77840, 4096)
+    call void st64(77848, 1024)
+    call void st64(77856, 768)
+    call void st64(77864, 128)
+    call void st64(77872, 48)
+    call void st64(77880, 0)
+    call void st64(77888, 0)
+    call void st64(77824, 1)
+    call void fb_clear()
+    br fin()
+  next(dev: i64):
+    %d2 = add i64 dev, 1
+    br scan(%d2)
+  fin():
+    ret
+}
+
+fn fb_init(ptr) -> void {
+  entry(mbi: ptr):
+    call void st64(77824, 0)
+    %mb = bitcast i64 mbi
+    %fl = call i64 mload32(%mb)
+    %has = and i64 %fl, 4096
+    %no = icmp.eq i64 %has, 0
+    condbr %no, bochs(), rd(%mb)
+  rd(mb: i64):
+    %a88 = add i64 mb, 88
+    %addr = call i64 mload(%a88)
+    %a96 = add i64 mb, 96
+    %pitch = call i64 mload32(%a96)
+    %a100 = add i64 mb, 100
+    %w = call i64 mload32(%a100)
+    %a104 = add i64 mb, 104
+    %h = call i64 mload32(%a104)
+    %a108 = add i64 mb, 108
+    %bpp = call i64 mload8(%a108)
+    %a109 = add i64 mb, 109
+    %ty = call i64 mload8(%a109)
+    %okb = icmp.eq i64 %bpp, 32
+    %okt = icmp.eq i64 %ty, 1
+    %oka = icmp.ne i64 %addr, 0
+    %z1 = zext i64 %okb
+    %z2 = zext i64 %okt
+    %z3 = zext i64 %oka
+    %t1 = and i64 %z1, %z2
+    %t2 = and i64 %t1, %z3
+    %ok = icmp.ne i64 %t2, 0
+    condbr %ok, set(%addr, %pitch, %w, %h), bochs()
+  bochs():
+    call void fb_bochs()
+    ret
+  set(addr: i64, pitch: i64, w: i64, h: i64):
+    call void st64(77832, addr)
+    call void st64(77840, pitch)
+    call void st64(77848, w)
+    call void st64(77856, h)
+    %cols = lshr i64 w, 3
+    call void st64(77864, %cols)
+    %rows = lshr i64 h, 4
+    call void st64(77872, %rows)
+    call void st64(77880, 0)
+    call void st64(77888, 0)
+    call void st64(77824, 1)
+    call void fb_clear()
+    br fin()
+  fin():
+    ret
+}
+
+fn fb_clear() -> void {
+  entry():
+    %addr = call i64 ld64(77832)
+    %pitch = call i64 ld64(77840)
+    %h = call i64 ld64(77856)
+    %total = mul i64 %pitch, %h
+    br loop(%addr, %total, 0)
+  loop(addr: i64, total: i64, i: i64):
+    %done = icmp.sge i64 i, total
+    condbr %done, fin(), body(addr, total, i)
+  body(addr: i64, total: i64, i: i64):
+    %a = add i64 addr, i
+    %z = iconst i32 0
+    call void mstore32(%a, %z)
+    %i2 = add i64 i, 4
+    br loop(addr, total, %i2)
+  fin():
+    ret
+}
+
+fn fb_scroll() -> void {
+  entry():
+    %addr = call i64 ld64(77832)
+    %pitch = call i64 ld64(77840)
+    %h = call i64 ld64(77856)
+    %rowb = shl i64 %pitch, 4
+    %total = mul i64 %pitch, %h
+    %move = sub i64 %total, %rowb
+    %src = add i64 %addr, %rowb
+    br loop(%addr, %src, %move, 0)
+  loop(dst: i64, src: i64, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, clr(dst, n), body(dst, src, n, i)
+  body(dst: i64, src: i64, n: i64, i: i64):
+    %sa = add i64 src, i
+    %v = call i64 mload32(%sa)
+    %da = add i64 dst, i
+    %v32 = trunc i32 %v
+    call void mstore32(%da, %v32)
+    %i2 = add i64 i, 4
+    br loop(dst, src, n, %i2)
+  clr(dst: i64, n: i64):
+    %pitch = call i64 ld64(77840)
+    %rowb = shl i64 %pitch, 4
+    %base = add i64 dst, n
+    br cloop(%base, %rowb, 0)
+  cloop(base: i64, n: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), cbody(base, n, i)
+  cbody(base: i64, n: i64, i: i64):
+    %a = add i64 base, i
+    %z = iconst i32 0
+    call void mstore32(%a, %z)
+    %i2 = add i64 i, 4
+    br cloop(base, n, %i2)
+  fin():
+    ret
+}
+
+fn fb_glyph(i64, i64, i64) -> void {
+  entry(c: i64, x: i64, y: i64):
+    %fp = call ptr s_font()
+    %font = bitcast i64 %fp
+    %lo = icmp.slt i64 c, 32
+    %hi = icmp.sgt i64 c, 126
+    %z1 = zext i64 %lo
+    %z2 = zext i64 %hi
+    %either = or i64 %z1, %z2
+    %bad = icmp.ne i64 %either, 0
+    condbr %bad, sub(%font, x, y), go(%font, c, x, y)
+  sub(font: i64, x: i64, y: i64):
+    br go(font, 63, x, y)
+  go(font: i64, c: i64, x: i64, y: i64):
+    %gi = sub i64 c, 32
+    %g16 = shl i64 %gi, 4
+    %gbase = add i64 font, %g16
+    %addr = call i64 ld64(77832)
+    %pitch = call i64 ld64(77840)
+    %py = shl i64 y, 4
+    %px = shl i64 x, 3
+    br loop(%gbase, %addr, %pitch, %py, %px, 0)
+  loop(gb: i64, addr: i64, pitch: i64, py: i64, px: i64, i: i64):
+    %done = icmp.sge i64 i, 128
+    condbr %done, fin(), body(gb, addr, pitch, py, px, i)
+  body(gb: i64, addr: i64, pitch: i64, py: i64, px: i64, i: i64):
+    %r = lshr i64 i, 3
+    %cx = and i64 i, 7
+    %ga = add i64 gb, %r
+    %bits = call i64 mload8(%ga)
+    %sh = sub i64 7, %cx
+    %bit = lshr i64 %bits, %sh
+    %on = and i64 %bit, 1
+    %yy = add i64 py, %r
+    %rowoff = mul i64 %yy, pitch
+    %xx = add i64 px, %cx
+    %off = shl i64 %xx, 2
+    %rb = add i64 addr, %rowoff
+    %a = add i64 %rb, %off
+    %fg = icmp.ne i64 %on, 0
+    condbr %fg, lit(%a, gb, addr, pitch, py, px, i), dark(%a, gb, addr, pitch, py, px, i)
+  lit(a: i64, gb: i64, addr: i64, pitch: i64, py: i64, px: i64, i: i64):
+    %c = iconst i32 11184810
+    call void mstore32(%a, %c)
+    br adv(gb, addr, pitch, py, px, i)
+  dark(a: i64, gb: i64, addr: i64, pitch: i64, py: i64, px: i64, i: i64):
+    %c = iconst i32 0
+    call void mstore32(%a, %c)
+    br adv(gb, addr, pitch, py, px, i)
+  adv(gb: i64, addr: i64, pitch: i64, py: i64, px: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(gb, addr, pitch, py, px, %i2)
+  fin():
+    ret
+}
+
+fn fb_putc(i64) -> void {
+  entry(c: i64):
+    %e77880 = iconst i64 77880
+    %e77888 = iconst i64 77888
+    %e0 = iconst i64 0
+    %e1 = iconst i64 1
+    %isn = icmp.eq i64 c, 10
+    condbr %isn, nl(), chk(c)
+  chk(c: i64):
+    %isc = icmp.eq i64 c, 13
+    condbr %isc, cr(), chkb(c)
+  cr():
+    call void st64(77880, 0)
+    ret
+  chkb(c: i64):
+    %isb = icmp.eq i64 c, 8
+    condbr %isb, bs(), pr(c)
+  bs():
+    %x = call i64 ld64(77880)
+    %gt = icmp.sgt i64 %x, 0
+    condbr %gt, bsgo(%x), fin()
+  bsgo(x: i64):
+    %x2 = sub i64 %x, 1
+    call void st64(77880, %x2)
+    %y = call i64 ld64(77888)
+    call void fb_glyph(32, %x2, %y)
+    br fin()
+  nl():
+    call void st64(77880, 0)
+    %y = call i64 ld64(77888)
+    %y2 = add i64 %y, 1
+    call void st64(77888, %y2)
+    br maybescroll()
+  pr(c: i64):
+    %x = call i64 ld64(77880)
+    %y = call i64 ld64(77888)
+    call void fb_glyph(c, %x, %y)
+    %x2 = add i64 %x, 1
+    %cols = call i64 ld64(77864)
+    %wrap = icmp.sge i64 %x2, %cols
+    condbr %wrap, wrap(), adv(%x2)
+  adv(x: i64):
+    call void st64(77880, x)
+    br fin()
+  wrap():
+    call void st64(77880, 0)
+    %y = call i64 ld64(77888)
+    %y2 = add i64 %y, 1
+    call void st64(77888, %y2)
+    br maybescroll()
+  maybescroll():
+    %y = call i64 ld64(77888)
+    %rows = call i64 ld64(77872)
+    %over = icmp.sge i64 %y, %rows
+    condbr %over, doscroll(), fin()
+  doscroll():
+    call void fb_scroll()
+    %rows = call i64 ld64(77872)
+    %y = sub i64 %rows, 1
+    call void st64(77888, %y)
+    br fin()
+  fin():
+    ret
+}

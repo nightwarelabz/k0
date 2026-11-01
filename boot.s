@@ -10,6 +10,10 @@
 # Machine services offered to Krell:
 #   k_out8(port, val)      byte port write
 #   k_in8(port) -> val     byte port read
+#   k_out16(port, val)     word port write
+#   k_in16(port) -> val    word port read
+#   k_out32(port, val)     dword port write
+#   k_in32(port) -> val    dword port read
 #   k_lidt(ptr)            load the interrupt table register
 #   k_sti() / k_cli()      interrupt enable / disable
 #   k_hlt()                halt until the next interrupt
@@ -19,11 +23,23 @@
 .intel_syntax noprefix
 
 # ---- Multiboot 1 header -------------------------------------
+# Flags: page-align modules (1) + memory map (2) + request a
+# linear framebuffer mode (4), 1024x768x32. If the loader does
+# not provide one, the kernel falls back to the text console.
 .section .multiboot, "a"
 .align 4
 .long 0x1BADB002
-.long 0x00000003
-.long -(0x1BADB002 + 3)
+.long 0x00000007
+.long -(0x1BADB002 + 7)
+.long 0
+.long 0
+.long 0
+.long 0
+.long 0
+.long 0
+.long 1024
+.long 768
+.long 32
 
 # ---- 64-bit GDT ----------------------------------------------
 .section .rodata
@@ -96,7 +112,7 @@ pd_loop:
     mov ecx, 0
 pd_inner:
     mov eax, ebp
-    shl eax, 21
+    shl eax, 30
     mov edx, ecx
     shl edx, 21
     add eax, edx
@@ -158,6 +174,34 @@ k_in8:
     mov edx, edi
     xor eax, eax
     in al, dx
+    ret
+
+.global k_out16
+k_out16:
+    mov edx, edi
+    mov eax, esi
+    out dx, ax
+    ret
+
+.global k_in16
+k_in16:
+    mov edx, edi
+    xor eax, eax
+    in ax, dx
+    ret
+
+.global k_out32
+k_out32:
+    mov edx, edi
+    mov eax, esi
+    out dx, eax
+    ret
+
+.global k_in32
+k_in32:
+    mov edx, edi
+    xor eax, eax
+    in eax, dx
     ret
 
 .global k_lidt

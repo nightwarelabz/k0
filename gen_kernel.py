@@ -27,13 +27,17 @@ STRINGS = [
     ("ints", "k0: interrupts live: IDT 256 | PIC remapped | PIT 100 Hz"),
     ("ready", "k0: scheduler running. type help."),
     ("prompt", "k0> "),
-    ("help", "commands: help about mem ticks ps alloc free clear echo\n"
+    ("help", "commands: help about mem ticks ps alloc free clear echo heap htest mods run dir cat store ping\n"
              "  alloc  take a 4 KiB frame and write a test pattern\n"
              "  free   give the frame back\n"
+             "  heap   heap state: base, free bytes, live blocks, largest block\n"
+             "  htest  heap self-test: patterns, reuse, coalescing\n"
              "  ps     the scheduler table with work counters\n"),
     ("about", "K0: boot, console, serial, physical memory, interrupts,\n"
-              "keyboard, scheduler and shell - all written in Krell.\n"
-              "The machine layer is eight services in boot.s.\n"),
+              "keyboard, scheduler, shell, heap, module runner,\n"
+              "filesystem, framebuffer console and network driver -\n"
+              "all written in Krell.\n"
+              "The machine layer is twelve services in boot.s.\n"),
     ("unknown", "unknown command: "),
     ("exc", "EXCEPTION vector "),
     ("halt", " - halted"),
@@ -59,6 +63,60 @@ STRINGS = [
     ("cfree", "free"),
     ("cclear", "clear"),
     ("cecho", "echo"),
+    ("heapr", "k0: heap ready: "),
+    ("heaprb", " bytes at "),
+    ("heapa", "heap: base "),
+    ("heapb", " free "),
+    ("heapc", " live "),
+    ("heapd", " largest "),
+    ("htp1", "htest: patterns ok"),
+    ("htp2", "htest: reuse ok"),
+    ("htp3", "htest: PASS"),
+    ("htf", "htest: FAIL"),
+    ("cheap", "heap"),
+    ("chtest", "htest"),
+    ("modok", "k0: modules in ramdisk: "),
+    ("modsa", "modules: "),
+    ("modsb", " bytes at "),
+    ("cmods", "mods"),
+    ("hk1", "kprint"),
+    ("hk2", "kputn"),
+    ("hk3", "kputc"),
+    ("hk4", "kticks"),
+    ("hk5", "kalloc"),
+    ("hk6", "kfree"),
+    ("hmain", "main"),
+    ("crun", "run"),
+    ("cdir", "dir"),
+    ("ccat", "cat"),
+    ("cstore", "store"),
+    ("nodisk", "no disk\n"),
+    ("fsdisk", "k0: filesystem: "),
+    ("fskfs", "k0fs, "),
+    ("fsfiles", " files, "),
+    ("fsfree", " sectors free\n"),
+    ("fsnone", "none\n"),
+    ("fsbytes", " bytes\n"),
+    ("cping", "ping"),
+    ("netpre", "k0: network: "),
+    ("netmac", "e1000 mac "),
+    ("netip", " ip 10.0.2.15\n"),
+    ("netno", "no network\n"),
+    ("pingok", "reply from 10.0.2.2: icmp_seq=1\n"),
+    ("pingno", "ping: no reply\n"),
+    ("fbpre", "k0: framebuffer: "),
+    ("fbx", "x"),
+    ("fbbpp", ", 32 bpp, text "),
+    ("fbcols", "x"),
+    ("fbend", "\n"),
+    ("catno", "cat: no such file\n"),
+    ("storeuse", "usage: store <name> <text>\n"),
+    ("storefull", "store: disk full\n"),
+    ("runpre", "run: "),
+    ("runexit", "exit "),
+    ("runfault", "module fault "),
+    ("runuse", "usage: run <index>\n"),
+    ("runno", "run: no such module\n"),
 ]
 
 TAB_PLAIN = [
@@ -80,6 +138,29 @@ assert len(TAB_PLAIN) == 58 and len(TAB_SHIFT) == 58
 blobs = []  # (accessor, [bytes])
 for name, text in STRINGS:
     blobs.append((name, list(text.encode("ascii")) + [0]))
+# 8x16 bitmap font for the framebuffer console, rendered from
+# DejaVu Sans Mono: glyphs for characters 32..127, 16 bytes each,
+# one byte per row, MSB = leftmost pixel.
+def _make_font():
+    from PIL import Image, ImageDraw, ImageFont
+    f = ImageFont.truetype(
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 16)
+    out = []
+    for ch in range(32, 128):
+        img = Image.new("L", (10, 20), 0)
+        d = ImageDraw.Draw(img)
+        d.text((0, -2), chr(ch), fill=255, font=f)
+        img = img.resize((8, 16))
+        for y in range(16):
+            byte = 0
+            for x in range(8):
+                if img.getpixel((x, y)) > 100:
+                    byte |= 1 << (7 - x)
+            out.append(byte)
+    return out
+
+FONT = _make_font()
+blobs.append(("font", FONT))
 blobs.append(("spin", SPIN))
 blobs.append(("tab1", TAB_PLAIN))
 blobs.append(("tab2", TAB_SHIFT))
@@ -97,7 +178,19 @@ for idx, (name, data) in enumerate(blobs):
 
 t1 = (HERE / "kernel_t1.krell").read_text()
 t2 = (HERE / "kernel_t2.krell").read_text()
-src = t1.replace("@@DATA@@", "\n".join(out)) + t2
+# The shell dispatch (exec_line) and main sit after the subsystem
+# templates so every command handler is defined before its caller;
+# each template is also written callee-first internally.
+marker = "fn exec_line() -> void {"
+head2, tail2 = t2.split(marker, 1)
+parts = [t1.replace("@@DATA@@", "\n".join(out)), head2]
+for extra in ("kernel_t3.krell", "kernel_t4.krell",
+              "kernel_t5.krell", "kernel_t6.krell"):
+    f = HERE / extra
+    if f.exists():
+        parts.append(f.read_text())
+parts.append(marker + tail2)
+src = "".join(parts)
 (HERE / "kernel.krell").write_text(src)
 print(f"kernel.krell: {len(src)} bytes, {src.count(chr(10))} lines, "
       f"{len(blobs)} data blobs")

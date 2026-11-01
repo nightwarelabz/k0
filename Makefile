@@ -13,7 +13,7 @@ LD     ?= ld
 
 all: k0.32.elf
 
-kernel.krell: kernel_t1.krell kernel_t2.krell gen_kernel.py
+kernel.krell: kernel_t1.krell kernel_t2.krell kernel_t3.krell kernel_t4.krell kernel_t5.krell kernel_t6.krell gen_kernel.py
 	python3 gen_kernel.py
 
 kernel.krel: kernel.krell
@@ -37,8 +37,18 @@ k0.elf: boot.o kernel.o kernel.ld
 k0.32.elf: k0.elf
 	objcopy -O elf32-i386 k0.elf k0.32.elf
 
-run: k0.32.elf
-	qemu-system-x86_64 -kernel k0.32.elf -m 128 -display none -serial stdio
+MODULES = modules/hello.krel modules/fib.krel modules/mem.krel
+
+modules/%.krel: modules/%.krell
+	KRELL_TARGETS=$(dir $(KRELLC))targets $(KRELLC) parse $< -o $@
+
+modules: $(MODULES)
+
+run: k0.32.elf modules disk.img
+	qemu-system-x86_64 -kernel k0.32.elf -initrd modules/hello.krel,modules/fib.krel,modules/mem.krel -drive file=disk.img,format=raw,if=ide -m 128 -display none -serial stdio
+
+disk.img: mkdisk.py
+	python3 mkdisk.py disk.img
 
 drive: k0.32.elf
 	python3 drive.py

@@ -12,6 +12,10 @@ if log.exists(): log.unlink()
 
 qemu = subprocess.Popen([
     "qemu-system-x86_64", "-kernel", str(HERE / "k0.32.elf"),
+    "-initrd", "modules/hello.krel,modules/fib.krel,modules/mem.krel",
+    "-drive", "file=disk.img,format=raw,if=ide",
+    "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+    "-vga", "std",
     "-m", "128", "-display", "none", "-no-reboot",
     "-serial", f"file:{log}",
     "-monitor", f"unix:{SOCK},server,nowait",
@@ -40,7 +44,7 @@ def cmd(c, wait=0.25):
     time.sleep(wait)
     drain()
 
-KEYMAP = {" ": "spc", "\n": "ret"}
+KEYMAP = {" ": "spc", "\n": "ret", ".": "dot", "-": "minus"}
 def typ(text, per=0.16, settle=1.4):
     for ch in text:
         cmd(f"sendkey {KEYMAP.get(ch, ch)}", per)
@@ -60,6 +64,15 @@ ok = wait_serial("scheduler running")
 print("boot to shell:", ok)
 if ok:
     typ("help\n")
+    typ("heap\n")
+    typ("htest\n")
+    typ("mods\n")
+    typ("run 0\n", settle=2.5)
+    typ("run 1\n", settle=2.5)
+    typ("run 2\n", settle=2.5)
+    typ("dir\n")
+    typ("cat readme.txt\n")
+    typ("ping\n", settle=4.0)
     typ("mem\n")
     typ("alloc\n")
     typ("free\n")
