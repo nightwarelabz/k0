@@ -145,6 +145,14 @@ boot (drive_boot.py); the three sample modules compiled to
 native code print and exit identically under `nrun`
 (drive_nat.py).
 
+On aarch64 the same module boots on QEMU `virt` (proven on an
+M1 Mac): the serial log shows the Multiboot handshake, 31,232
+of 32,768 frames free, three ramdisk modules and the heap
+ready; filesystem, framebuffer and network report none (absent
+by design on this target); the scheduler is live, `run 1`
+prints `fib(20) = 6765` with exit 0, and the timer advances
+(124 ticks at about one second).
+
 ## Build and run
 
 Needs the Krell toolchain from the v1.1 branch of the Krell
