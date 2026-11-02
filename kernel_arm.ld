@@ -16,19 +16,19 @@ SECTIONS {
     .bootarm : { *(.bootarm) }
 
     . = 0x100000 + SIZEOF(.bootarm);
-    .text : AT(LOADADDR(.bootarm) + SIZEOF(.bootarm)) {
+    .text : AT(ADDR(.text) + 0x40000000) {
         *(.text)
         *(.text.*)
     }
-    .rodata : AT(LOADADDR(.text) + SIZEOF(.text)) {
+    .rodata : AT(ADDR(.rodata) + 0x40000000) {
         *(.rodata)
         *(.rodata.*)
     }
-    .data : AT(LOADADDR(.rodata) + SIZEOF(.rodata)) {
+    .data : AT(ADDR(.data) + 0x40000000) {
         *(.data)
         *(.data.*)
     }
-    .bss : {
+    .bss : AT(ADDR(.bss) + 0x40000000) {
         *(.bss)
         *(.bss.*)
         *(COMMON)

@@ -7,7 +7,7 @@
 # The Krell toolchain (krellc) comes from a Krell checkout;
 # point KRELLC at it if the default path does not match.
 
-KRELLC ?= ~/workspace/rung/krellc
+KRELLC ?= $(shell test -f ~/krell/krellc && echo ~/krell/krellc || echo ~/workspace/rung/krellc)
 CC     ?= cc
 LD     ?= ld
 
@@ -53,8 +53,8 @@ nat: $(NATMODS)
 
 # ---- aarch64 (QEMU virt): same kernel module, ARM machine layer
 
-AAS   = aarch64-linux-gnu-as
-ALD   = aarch64-linux-gnu-ld
+AAS   ?= $(shell which aarch64-linux-gnu-as 2>/dev/null || which aarch64-elf-as 2>/dev/null || echo aarch64-linux-gnu-as)
+ALD   ?= $(shell which aarch64-linux-gnu-ld 2>/dev/null || which aarch64-elf-ld 2>/dev/null || echo aarch64-linux-gnu-ld)
 
 kernel_arm.s: kernel.krel
 	$(KRELLC) build kernel.krel --target aarch64 -o kernel_arm.s

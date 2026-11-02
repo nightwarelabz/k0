@@ -47,7 +47,8 @@
     .equ RAM_PA,      0x40000000
     .equ RAM_MIB_KIB, 130048          // mem_upper for 128 MiB
     .equ UART_VA,     0x08000000      // PL011 at PA 0x09000000
-    .equ GIC_VA,      0x08200000      // GIC at PA 0x08000000
+    .equ GICD_VA,     0x08200000      // GICD at PA 0x08000000
+    .equ GICC_VA,     0x08210000      // GICC at PA 0x08010000
     .equ VGA_LO,      0xB8000
     .equ VGA_HI,      0xC0000
 
@@ -93,6 +94,7 @@ el1_in:
     add     x1, x1, x28
     orr     x1, x1, #3                // valid table descriptor
     str     x1, [x0]
+    str     x1, [x0, #8]
 
     // L2[0..63]: 2 MiB blocks, VA i*2MiB -> PA RAM + i*2MiB,
     // normal write-back, inner shareable, access flag set
@@ -156,17 +158,19 @@ arm_land:
     ldr     x1, =arm_vectors
     msr     vbar_el1, x1
 
-    // GIC: distributor on, timer PPI 29 enabled, CPU interface on
-    ldr     x0, =GIC_VA
+    // GIC: distributor on, timer PPI 30 enabled, CPU interface on
+    ldr     x0, =GICD_VA
     mov     w1, #1
     str     w1, [x0]                  // GICD_CTLR
-    mov     w1, #(1 << 29)
+    mov     w1, #((1 << 29) | (1 << 30))
     str     w1, [x0, #0x100]          // GICD_ISENABLER0
     strb    wzr, [x0, #0x400 + 29]    // GICD_IPRIORITYR29 = 0
+    strb    wzr, [x0, #0x400 + 30]    // GICD_IPRIORITYR30 = 0
+    ldr     x0, =GICC_VA
     mov     w1, #0xff
-    str     w1, [x0, #0x1004]         // GICC_PMR
+    str     w1, [x0, #0x4]            // GICC_PMR
     mov     w1, #1
-    str     w1, [x0, #0x1000]         // GICC_CTLR
+    str     w1, [x0, #0x0]            // GICC_CTLR
 
     // PL011: 115200 8n1, FIFOs on, all interrupts masked (polled)
     ldr     x0, =UART_VA
@@ -547,12 +551,14 @@ irq_entry:
     stp     x26, x27, [sp, #208]
     stp     x28, x29, [sp, #224]
     str     x30, [sp, #240]
-    ldr     x19, =GIC_VA
-    ldr     w20, [x19, #0x100c]       // GICC_IAR
+    ldr     x19, =GICC_VA
+    ldr     w20, [x19, #0xc]          // GICC_IAR
     and     w21, w20, #0x3ff          // interrupt id
     cmp     w21, #29
+    b.eq    10f
+    cmp     w21, #30
     b.ne    irq_eoi                   // spurious or unexpected
-    ldr     x0, =arm_step             // re-arm the timer
+10: ldr     x0, =arm_step             // re-arm the timer
     ldr     x0, [x0]
     msr     cntp_tval_el0, x0
     // drain the UART receive FIFO
@@ -595,7 +601,7 @@ irq_entry:
     ldr     x16, =k_dispatch
     blr     x16
 irq_eoi:
-    str     w20, [x19, #0x1010]       // GICC_EOIR
+    str     w20, [x19, #0x10]         // GICC_EOIR
     ldp     x0, x1, [sp, #0]
     ldp     x2, x3, [sp, #16]
     ldp     x4, x5, [sp, #32]
