@@ -1,0 +1,837 @@
+
+; K0 template part 6: network. A polling driver for the Intel
+; 82540EM (QEMU e1000) on PCI, plus ARP and ICMP, all in Krell.
+; Addresses: our IP is 10.0.2.15, the gateway is 10.0.2.2 (the
+; QEMU user-network addresses). No interrupts: the shell polls.
+; State (arena): 53248 present, 53256 MMIO base, 53264 MAC
+; (6 bytes), 53272 our IP (4 bytes), 53280 gateway IP (4 bytes),
+; 53288 rx index, 53296 tx index, 53304 gateway MAC (6 bytes),
+; 53312 gateway known flag, 53320 echo reply flag,
+; 53328 echo reply sequence. Rings (arena): rx descriptors
+; 53504 (8 x 16 bytes), tx descriptors 53760 (8 x 16 bytes).
+; Buffers (arena): rx 57344 (8 x 2048), tx staging 73728 (2048).
+; Descriptor and buffer addresses handed to the device are
+; arena addresses, which are physical (identity mapping).
+
+fn pci_write32(i64, i64, i64) -> void {
+  entry(dev: i64, reg: i64, val: i64):
+    %base = iconst i64 2147483648
+    %ds = shl i64 dev, 11
+    %r = and i64 reg, 252
+    %addr = or i64 %base, %ds
+    %addr2 = or i64 %addr, %r
+    %a32 = trunc i32 %addr2
+    call void k_out32(3320, %a32)
+    %v32 = trunc i32 val
+    call void k_out32(3324, %v32)
+    ret
+}
+
+fn nr(i64) -> i64 {
+  entry(off: i64):
+    %base = call i64 ld64(53256)
+    %a = add i64 %base, off
+    %v = call i64 mload32(%a)
+    ret %v
+}
+
+fn nw(i64, i64) -> void {
+  entry(off: i64, val: i64):
+    %base = call i64 ld64(53256)
+    %a = add i64 %base, off
+    %v32 = trunc i32 val
+    call void mstore32(%a, %v32)
+    ret
+}
+
+fn ring_rx() -> i64 {
+  entry():
+    %p = call ptr ksf(53504)
+    %a = bitcast i64 %p
+    ret %a
+}
+
+fn ring_tx() -> i64 {
+  entry():
+    %p = call ptr ksf(53760)
+    %a = bitcast i64 %p
+    ret %a
+}
+
+fn rxbuf(i64) -> i64 {
+  entry(i: i64):
+    %off = shl i64 i, 11
+    %o2 = add i64 57344, %off
+    %p = call ptr ksf(%o2)
+    %a = bitcast i64 %p
+    ret %a
+}
+
+fn txbuf() -> i64 {
+  entry():
+    %p = call ptr ksf(73728)
+    %a = bitcast i64 %p
+    ret %a
+}
+
+fn bput16(i64, i64, i64) -> void {
+  entry(buf: i64, off: i64, v: i64):
+    %a = add i64 buf, off
+    %hi = lshr i64 v, 8
+    %hi8 = and i64 %hi, 255
+    call void mstore8(%a, %hi8)
+    %a2 = add i64 %a, 1
+    %lo = and i64 v, 255
+    call void mstore8(%a2, %lo)
+    ret
+}
+
+fn bget16(i64, i64) -> i64 {
+  entry(buf: i64, off: i64):
+    %a = add i64 buf, off
+    %hi = call i64 mload8(%a)
+    %a2 = add i64 %a, 1
+    %lo = call i64 mload8(%a2)
+    %h8 = shl i64 %hi, 8
+    %r = or i64 %h8, %lo
+    ret %r
+}
+
+fn copy_ip(i64, i64, i64) -> void {
+  entry(dst: i64, doff: i64, src: i64):
+    br loop(dst, doff, src, 0)
+  loop(dst: i64, doff: i64, src: i64, i: i64):
+    %done = icmp.sge i64 i, 4
+    condbr %done, fin(), body(dst, doff, src, i)
+  body(dst: i64, doff: i64, src: i64, i: i64):
+    %sa = add i64 src, i
+    %v = call i64 mload8(%sa)
+    %da = add i64 dst, doff
+    %da2 = add i64 %da, i
+    call void mstore8(%da2, %v)
+    %i2 = add i64 i, 1
+    br loop(dst, doff, src, %i2)
+  fin():
+    ret
+}
+
+fn ip_is(i64, i64, i64) -> i64 {
+  entry(buf: i64, off: i64, addr: i64):
+    %e1 = iconst i64 1
+    br loop(buf, off, addr, 0)
+  loop(buf: i64, off: i64, addr: i64, i: i64):
+    %done = icmp.sge i64 i, 4
+    condbr %done, yes(), body(buf, off, addr, i)
+  body(buf: i64, off: i64, addr: i64, i: i64):
+    %a = add i64 buf, off
+    %a2 = add i64 %a, i
+    %c1 = call i64 mload8(%a2)
+    %b = add i64 addr, i
+    %c2 = call i64 mload8(%b)
+    %eq = icmp.eq i64 %c1, %c2
+    condbr %eq, next(buf, off, addr, i), no()
+  next(buf: i64, off: i64, addr: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(buf, off, addr, %i2)
+  yes():
+    ret 1
+  no():
+    ret 0
+}
+
+fn ip_sum(i64, i64) -> i64 {
+  entry(buf: i64, len: i64):
+    br loop(buf, len, 0, 0)
+  loop(buf: i64, len: i64, i: i64, acc: i64):
+    %done = icmp.sge i64 i, len
+    condbr %done, fold(acc), body(buf, len, i, acc)
+  body(buf: i64, len: i64, i: i64, acc: i64):
+    %w = call i64 bget16(buf, i)
+    %a2 = add i64 acc, %w
+    %i2 = add i64 i, 2
+    br loop(buf, len, %i2, %a2)
+  fold(acc: i64):
+    %hi = lshr i64 acc, 16
+    %lo = and i64 acc, 65535
+    %s = add i64 %hi, %lo
+    %hi2 = lshr i64 %s, 16
+    %lo2 = and i64 %s, 65535
+    %s2 = add i64 %hi2, %lo2
+    %r = xor i64 %s2, 65535
+    ret %r
+}
+
+fn putx2(i64) -> void {
+  entry(v: i64):
+    %hi = lshr i64 v, 4
+    %h2 = and i64 %hi, 15
+    %lo = and i64 v, 15
+    br d1(%h2, %lo)
+  d1(h: i64, l: i64):
+    %c = call i64 hexch(h)
+    call void con_putc(%c)
+    %c2 = call i64 hexch(l)
+    call void con_putc(%c2)
+    ret
+}
+
+fn hexch(i64) -> i64 {
+  entry(v: i64):
+    %lt = icmp.slt i64 v, 10
+    condbr %lt, dig(v), let(v)
+  dig(v: i64):
+    %r = add i64 v, 48
+    ret %r
+  let(v: i64):
+    %r = add i64 v, 87
+    ret %r
+}
+
+fn print_mac(i64) -> void {
+  entry(addr: i64):
+    br loop(addr, 0)
+  loop(addr: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, fin(), body(addr, i)
+  body(addr: i64, i: i64):
+    %a = add i64 addr, i
+    %b = call i64 mload8(%a)
+    call void putx2(%b)
+    %last = icmp.slt i64 i, 5
+    condbr %last, colon(addr, i), next(addr, i)
+  colon(addr: i64, i: i64):
+    call void con_putc(58)
+    br next(addr, i)
+  next(addr: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(addr, %i2)
+  fin():
+    ret
+}
+
+fn net_init() -> void {
+  entry():
+    %e1 = iconst i64 1
+    %e2 = iconst i64 2
+    call void st64(53248, 0)
+    call void st64(53312, 0)
+    call void st64(53320, 0)
+    br scan(0)
+  scan(dev: i64):
+    %over = icmp.sge i64 dev, 32
+    condbr %over, fin(), probe(dev)
+  probe(dev: i64):
+    %id = call i64 pci_read32(dev, 0)
+    %ven = and i64 %id, 65535
+    %devid = lshr i64 %id, 16
+    %okv = icmp.eq i64 %ven, 32902
+    %okd = icmp.eq i64 %devid, 4110
+    %z1 = zext i64 %okv
+    %z2 = zext i64 %okd
+    %both = and i64 %z1, %z2
+    %hit = icmp.ne i64 %both, 0
+    condbr %hit, found(dev), next(dev)
+  next(dev: i64):
+    %d2 = add i64 dev, 1
+    br scan(%d2)
+  found(dev: i64):
+    %cmd0 = call i64 pci_read32(dev, 4)
+    %cmd1 = or i64 %cmd0, 6
+    call void pci_write32(dev, 4, %cmd1)
+    %b = call i64 pci_read32(dev, 16)
+    %mmio = and i64 %b, -16
+    %no = icmp.eq i64 %mmio, 0
+    condbr %no, fin(), setup(%mmio)
+  setup(mmio: i64):
+    call void st64(53256, mmio)
+    %ctl = call i64 nr(0)
+    %rst = or i64 %ctl, 67108864
+    call void nw(0, %rst)
+    br wait1(0)
+  wait1(n: i64):
+    %done = icmp.sge i64 n, 100000
+    condbr %done, cfg(), spin(n)
+  spin(n: i64):
+    %n2 = add i64 n, 1
+    br wait1(%n2)
+  cfg():
+    call void nw(208, 0)
+    %ctl = call i64 nr(0)
+    %c2 = or i64 %ctl, 96
+    %c3 = and i64 %c2, -67108865
+    call void nw(0, %c3)
+    br mta(0)
+  mta(i: i64):
+    %done = icmp.sge i64 i, 128
+    condbr %done, mac(), mbody(i)
+  mbody(i: i64):
+    %off = shl i64 i, 2
+    %o2 = add i64 20992, %off
+    call void nw(%o2, 0)
+    %i2 = add i64 i, 1
+    br mta(%i2)
+  mac():
+    %ral = call i64 nr(21504)
+    %rah = call i64 nr(21508)
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %ma = add i64 %bp, 53264
+    call void st64(53264, %ral)
+    %ma4 = add i64 %bp, 53268
+    %rah32 = trunc i32 %rah
+    call void mstore32(%ma4, %rah32)
+    %rah2 = or i64 %rah, 2147483648
+    call void nw(21508, %rah2)
+    %ip = add i64 %bp, 53272
+    call void mstore8(%ip, 10)
+    %ip1 = add i64 %ip, 1
+    call void mstore8(%ip1, 0)
+    %ip2 = add i64 %ip, 2
+    call void mstore8(%ip2, 2)
+    %ip3 = add i64 %ip, 3
+    call void mstore8(%ip3, 15)
+    %gw = add i64 %bp, 53280
+    call void mstore8(%gw, 10)
+    %gw1 = add i64 %gw, 1
+    call void mstore8(%gw1, 0)
+    %gw2 = add i64 %gw, 2
+    call void mstore8(%gw2, 2)
+    %gw3 = add i64 %gw, 3
+    call void mstore8(%gw3, 2)
+    br rxsetup()
+  rxsetup():
+    %ring = call i64 ring_rx()
+    call void mzero(%ring, 256)
+    br rfill(0)
+  rfill(i: i64):
+    %done = icmp.sge i64 i, 8
+    condbr %done, rxregs(), rbody(i)
+  rbody(i: i64):
+    %ring = call i64 ring_rx()
+    %off = shl i64 i, 4
+    %d = add i64 %ring, %off
+    %buf = call i64 rxbuf(i)
+    call void mstore(%d, %buf)
+    %i2 = add i64 i, 1
+    br rfill(%i2)
+  rxregs():
+    %ring = call i64 ring_rx()
+    %lo = and i64 %ring, 4294967295
+    %hi = lshr i64 %ring, 32
+    call void nw(10240, %lo)
+    call void nw(10244, %hi)
+    call void nw(10248, 128)
+    call void nw(10256, 0)
+    call void nw(10264, 7)
+    br txsetup()
+  txsetup():
+    %ring = call i64 ring_tx()
+    call void mzero(%ring, 256)
+    %lo = and i64 %ring, 4294967295
+    %hi = lshr i64 %ring, 32
+    call void nw(14336, %lo)
+    call void nw(14340, %hi)
+    call void nw(14344, 128)
+    call void nw(14352, 0)
+    call void nw(14360, 0)
+    call void nw(1040, 6299914)
+    call void nw(1024, 262394)
+    call void nw(256, 32770)
+    call void st64(53288, 0)
+    call void st64(53296, 0)
+    call void st64(53248, 1)
+    br fin()
+  fin():
+    ret
+}
+
+fn net_send(i64) -> void {
+  entry(len: i64):
+    %idx = call i64 ld64(53296)
+    %ring = call i64 ring_tx()
+    %off = shl i64 %idx, 4
+    %d = add i64 %ring, %off
+    %buf = call i64 txbuf()
+    call void mstore(%d, %buf)
+    %cmd = shl i64 11, 24
+    %rec = or i64 len, %cmd
+    %d8 = add i64 %d, 8
+    call void mstore(%d8, %rec)
+    %nt = add i64 %idx, 1
+    %nt2 = and i64 %nt, 7
+    call void st64(53296, %nt2)
+    call void nw(14360, %nt2)
+    br poll(%d, 0)
+  poll(d: i64, n: i64):
+    %a = add i64 d, 12
+    %st = call i64 mload8(%a)
+    %dd = and i64 %st, 1
+    %done = icmp.ne i64 %dd, 0
+    condbr %done, fin(), spin(d, n)
+  spin(d: i64, n: i64):
+    %n2 = add i64 n, 1
+    %over = icmp.sgt i64 %n2, 2000000
+    condbr %over, fin(), poll(d, %n2)
+  fin():
+    ret
+}
+
+fn eth_write(i64, i64, i64) -> void {
+  entry(buf: i64, dst: i64, ty: i64):
+    %e1 = iconst i64 1
+    br mloop(buf, dst, 0)
+  mloop(buf: i64, dst: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, src(buf, ty, 0), mbody(buf, dst, i)
+  mbody(buf: i64, dst: i64, i: i64):
+    %a = add i64 dst, i
+    %v = call i64 mload8(%a)
+    %da = add i64 buf, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br mloop(buf, dst, %i2)
+  src(buf: i64, ty: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, typ(buf, ty), sbody(buf, ty, i)
+  sbody(buf: i64, ty: i64, i: i64):
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %ma = add i64 %bp, 53264
+    %a = add i64 %ma, i
+    %v = call i64 mload8(%a)
+    %d6 = add i64 buf, 6
+    %da = add i64 %d6, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br src(buf, ty, %i2)
+  typ(buf: i64, ty: i64):
+    call void bput16(buf, 12, ty)
+    ret
+}
+
+fn net_poll() -> void {
+  entry():
+    br loop()
+  loop():
+    %idx = call i64 ld64(53288)
+    %ring = call i64 ring_rx()
+    %off = shl i64 %idx, 4
+    %d = add i64 %ring, %off
+    %sa = add i64 %d, 12
+    %st = call i64 mload8(%sa)
+    %dd = and i64 %st, 1
+    %has = icmp.ne i64 %dd, 0
+    condbr %has, handle(%d, %idx), fin()
+  handle(d: i64, idx: i64):
+    %l8 = add i64 d, 8
+    %lo = call i64 mload8(%l8)
+    %l9 = add i64 d, 9
+    %hi = call i64 mload8(%l9)
+    %h8 = shl i64 %hi, 8
+    %len = or i64 %lo, %h8
+    %buf = call i64 rxbuf(idx)
+    call void handle_pkt(%buf, %len)
+    %sa = add i64 d, 12
+    call void mstore8(%sa, 0)
+    call void nw(10264, idx)
+    %n2 = add i64 idx, 1
+    %n3 = and i64 %n2, 7
+    call void st64(53288, %n3)
+    br loop()
+  fin():
+    ret
+}
+
+fn handle_pkt(i64, i64) -> void {
+  entry(buf: i64, len: i64):
+    %e22 = iconst i64 22
+    %e2048 = iconst i64 2048
+    %e6 = iconst i64 6
+    %e2 = iconst i64 2
+    %e28 = iconst i64 28
+    %e53272 = iconst i64 53272
+    %e0 = iconst i64 0
+    %e1 = iconst i64 1
+    %ty = call i64 bget16(buf, 12)
+    %arp = icmp.eq i64 %ty, 2054
+    condbr %arp, isarp(buf, len), chk4(buf, len, %ty)
+  chk4(buf: i64, len: i64, ty: i64):
+    %ip4 = icmp.eq i64 ty, 2048
+    condbr %ip4, isip(buf, len), fin()
+  fin():
+    ret
+  isarp(buf: i64, len: i64):
+    %short = icmp.slt i64 len, 42
+    condbr %short, fin(), arp(buf, len)
+  arp(buf: i64, len: i64):
+    %op = call i64 bget16(buf, 20)
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %ours = add i64 %bp, 53272
+    %tip = add i64 buf, 38
+    %forus = call i64 ip_is(%tip, 0, %ours)
+    %is1 = icmp.eq i64 %op, 1
+    %z2 = zext i64 %is1
+    %both = and i64 %forus, %z2
+    %req = icmp.ne i64 %both, 0
+    condbr %req, reply(buf), chk2(buf, %op)
+  chk2(buf: i64, op: i64):
+    %is2 = icmp.eq i64 op, 2
+    condbr %is2, learn(buf), fin()
+  learn(buf: i64):
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %gw = add i64 %bp, 53280
+    %sip = add i64 buf, 28
+    %fromgw = call i64 ip_is(%sip, 0, %gw)
+    %yes = icmp.ne i64 %fromgw, 0
+    condbr %yes, save(buf), fin()
+  save(buf: i64):
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %gm = add i64 %bp, 53304
+    br sloop(buf, %gm, 0)
+  sloop(buf: i64, gm: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, sfin(), sbody(buf, gm, i)
+  sbody(buf: i64, gm: i64, i: i64):
+    %sa = add i64 buf, 22
+    %a = add i64 %sa, i
+    %v = call i64 mload8(%a)
+    %da = add i64 gm, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br sloop(buf, gm, %i2)
+  sfin():
+    call void st64(53312, 1)
+    ret
+  reply(buf: i64):
+    %tx = call i64 txbuf()
+    %smac = add i64 buf, 22
+    call void eth_write(%tx, %smac, 2054)
+    call void bput16(%tx, 14, 1)
+    call void bput16(%tx, 16, 2048)
+    %a18 = add i64 %tx, 18
+    call void mstore8(%a18, 6)
+    %a19 = add i64 %tx, 19
+    call void mstore8(%a19, 4)
+    call void bput16(%tx, 20, 2)
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %ma = add i64 %bp, 53264
+    br cp1(%tx, %ma, buf)
+  cp1(tx: i64, ma: i64, buf: i64):
+    br m1(tx, ma, 0)
+  m1(tx: i64, ma: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, cp2(tx, buf), m1b(tx, ma, i)
+  m1b(tx: i64, ma: i64, i: i64):
+    %a = add i64 ma, i
+    %v = call i64 mload8(%a)
+    %d = add i64 tx, 22
+    %da = add i64 %d, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br m1(tx, ma, %i2)
+  cp2(tx: i64, buf: i64):
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %ours = add i64 %bp, 53272
+    call void copy_ip(%tx, 28, %ours)
+    %smac = add i64 buf, 22
+    br m2(tx, %smac, 0)
+  m2(tx: i64, smac: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, cp3(tx, buf), m2b(tx, smac, i)
+  m2b(tx: i64, smac: i64, i: i64):
+    %a = add i64 smac, i
+    %v = call i64 mload8(%a)
+    %d = add i64 tx, 32
+    %da = add i64 %d, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br m2(tx, smac, %i2)
+  cp3(tx: i64, buf: i64):
+    %sip = add i64 buf, 28
+    call void copy_ip(%tx, 38, %sip)
+    call void net_send(60)
+    ret
+  isip(buf: i64, len: i64):
+    %short = icmp.slt i64 len, 34
+    condbr %short, fin(), ip(buf, len)
+  ip(buf: i64, len: i64):
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %ours = add i64 %bp, 53272
+    %dip = add i64 buf, 30
+    %forus = call i64 ip_is(%dip, 0, %ours)
+    %no = icmp.eq i64 %forus, 0
+    condbr %no, fin(), proto(buf, len)
+  proto(buf: i64, len: i64):
+    %a = add i64 buf, 23
+    %pr = call i64 mload8(%a)
+    %icmp = icmp.eq i64 %pr, 1
+    condbr %icmp, icmp(buf, len), tcpchk(buf, len, %pr)
+  tcpchk(buf: i64, len: i64, pr: i64):
+    %istcp = icmp.eq i64 pr, 6
+    condbr %istcp, istcp(buf, len), fin()
+  istcp(buf: i64, len: i64):
+    call void tcp_handle(buf, len)
+    ret
+  icmp(buf: i64, len: i64):
+    call void icmp_handle(buf, len)
+    ret
+}
+
+fn ours() -> i64 {
+  entry():
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %r = add i64 %bp, 53272
+    ret %r
+}
+
+fn gwip() -> i64 {
+  entry():
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %r = add i64 %bp, 53280
+    ret %r
+}
+
+fn gwmac() -> i64 {
+  entry():
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %r = add i64 %bp, 53304
+    ret %r
+}
+
+fn ourmac() -> i64 {
+  entry():
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %r = add i64 %bp, 53264
+    ret %r
+}
+
+fn icmp_handle(i64, i64) -> void {
+  entry(buf: i64, len: i64):
+    %e6 = iconst i64 6
+    %e0 = iconst i64 0
+    %e1 = iconst i64 1
+    %b14 = add i64 buf, 14
+    %b = call i64 mload8(%b14)
+    %ihl4 = and i64 %b, 15
+    %ihl = shl i64 %ihl4, 2
+    %ioff = add i64 %ihl, 14
+    %ia = add i64 buf, %ioff
+    %ty = call i64 mload8(%ia)
+    %is8 = icmp.eq i64 %ty, 8
+    condbr %is8, echo(buf, len, %ioff), chk0(buf, len, %ioff, %ty)
+  chk0(buf: i64, len: i64, ioff: i64, ty: i64):
+    %is0 = icmp.eq i64 ty, 0
+    condbr %is0, got(buf, ioff), fin()
+  got(buf: i64, ioff: i64):
+    %o6 = add i64 ioff, 6
+    %sq = call i64 bget16(buf, %o6)
+    call void st64(53328, %sq)
+    call void st64(53320, 1)
+    ret
+  echo(buf: i64, len: i64, ioff: i64):
+    %tx = call i64 txbuf()
+    call void copy_bytes(%tx, buf, len)
+    %smac = add i64 buf, 6
+    call void eth_write(%tx, %smac, 2048)
+    %sip = add i64 buf, 26
+    call void copy_ip(%tx, 30, %sip)
+    %our = call i64 ours()
+    call void copy_ip(%tx, 26, %our)
+    %ia = add i64 %tx, ioff
+    call void mstore8(%ia, 0)
+    %ck = add i64 %ia, 2
+    call void mstore8(%ck, 0)
+    %ck2 = add i64 %ck, 1
+    call void mstore8(%ck2, 0)
+    %ilen = sub i64 len, ioff
+    %sum = call i64 ip_sum(%ia, %ilen)
+    %o2 = add i64 ioff, 2
+    call void bput16(%tx, %o2, %sum)
+    %hck = add i64 %tx, 24
+    call void mstore8(%hck, 0)
+    %hck2 = add i64 %hck, 1
+    call void mstore8(%hck2, 0)
+    %ihl = sub i64 ioff, 14
+    %h14 = add i64 %tx, 14
+    %hsum = call i64 ip_sum(%h14, %ihl)
+    call void bput16(%tx, 24, %hsum)
+    %mlt = icmp.slt i64 len, 60
+    %slen = select i64 %mlt, 60, len
+    call void net_send(%slen)
+    ret
+  fin():
+    ret
+}
+
+fn arp_ask() -> void {
+  entry():
+    %e1 = iconst i64 1
+    %tx = call i64 txbuf()
+    call void mzero(%tx, 64)
+    br ff(%tx, 0)
+  ff(tx: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, hdr(tx), ffb(tx, i)
+  ffb(tx: i64, i: i64):
+    %a = add i64 tx, i
+    call void mstore8(%a, 255)
+    %i2 = add i64 i, 1
+    br ff(tx, %i2)
+  hdr(tx: i64):
+    %ma = call i64 ourmac()
+    br sm(tx, %ma, 0)
+  sm(tx: i64, ma: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, typ(tx), smb(tx, ma, i)
+  smb(tx: i64, ma: i64, i: i64):
+    %a = add i64 ma, i
+    %v = call i64 mload8(%a)
+    %d = add i64 tx, 6
+    %da = add i64 %d, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br sm(tx, ma, %i2)
+  typ(tx: i64):
+    call void bput16(tx, 12, 2054)
+    call void bput16(tx, 14, 1)
+    call void bput16(tx, 16, 2048)
+    %a18 = add i64 tx, 18
+    call void mstore8(%a18, 6)
+    %a19 = add i64 tx, 19
+    call void mstore8(%a19, 4)
+    call void bput16(tx, 20, 1)
+    %ma = call i64 ourmac()
+    br sm2(tx, %ma, 0)
+  sm2(tx: i64, ma: i64, i: i64):
+    %done = icmp.sge i64 i, 6
+    condbr %done, ips(tx), sm2b(tx, ma, i)
+  sm2b(tx: i64, ma: i64, i: i64):
+    %a = add i64 ma, i
+    %v = call i64 mload8(%a)
+    %d = add i64 tx, 22
+    %da = add i64 %d, i
+    call void mstore8(%da, %v)
+    %i2 = add i64 i, 1
+    br sm2(tx, ma, %i2)
+  ips(tx: i64):
+    %our = call i64 ours()
+    call void copy_ip(tx, 28, %our)
+    %gw = call i64 gwip()
+    call void copy_ip(tx, 38, %gw)
+    call void net_send(60)
+    ret
+}
+
+fn echo_ask() -> void {
+  entry():
+    %tx = call i64 txbuf()
+    call void mzero(%tx, 64)
+    %gm = call i64 gwmac()
+    call void eth_write(%tx, %gm, 2048)
+    %a14 = add i64 %tx, 14
+    call void mstore8(%a14, 69)
+    call void bput16(%tx, 16, 36)
+    call void bput16(%tx, 18, 1)
+    call void bput16(%tx, 20, 0)
+    %a22 = add i64 %tx, 22
+    call void mstore8(%a22, 64)
+    %a23 = add i64 %tx, 23
+    call void mstore8(%a23, 1)
+    %our = call i64 ours()
+    call void copy_ip(%tx, 26, %our)
+    %gw = call i64 gwip()
+    call void copy_ip(%tx, 30, %gw)
+    %hsum = call i64 ip_sum(%a14, 20)
+    call void bput16(%tx, 24, %hsum)
+    %a34 = add i64 %tx, 34
+    call void mstore8(%a34, 8)
+    call void bput16(%tx, 38, 19792)
+    call void bput16(%tx, 40, 1)
+    %d = add i64 %tx, 42
+    call void mstore8(%d, 107)
+    %d1 = add i64 %d, 1
+    call void mstore8(%d1, 48)
+    %d2 = add i64 %d, 2
+    call void mstore8(%d2, 45)
+    %d3 = add i64 %d, 3
+    call void mstore8(%d3, 112)
+    %d4 = add i64 %d, 4
+    call void mstore8(%d4, 105)
+    %d5 = add i64 %d, 5
+    call void mstore8(%d5, 110)
+    %d6 = add i64 %d, 6
+    call void mstore8(%d6, 103)
+    %d7 = add i64 %d, 7
+    call void mstore8(%d7, 33)
+    br sum(%tx)
+  sum(tx: i64):
+    %a34 = add i64 tx, 34
+    %isum = call i64 ip_sum(%a34, 16)
+    call void bput16(tx, 36, %isum)
+    call void net_send(60)
+    ret
+}
+
+fn cmd_ping() -> void {
+  entry():
+    %e250 = iconst i64 250
+    %p = call i64 ld64(53248)
+    %no = icmp.eq i64 %p, 0
+    condbr %no, nonet(), go()
+  nonet():
+    %s = call ptr s_netno()
+    call void con_write(%s)
+    ret
+  go():
+    call void net_poll()
+    %known = call i64 ld64(53312)
+    %yes = icmp.ne i64 %known, 0
+    condbr %yes, send(), ask()
+  ask():
+    call void arp_ask()
+    %t0 = call i64 ld64(0)
+    br await(%t0)
+  await(t0: i64):
+    call void net_poll()
+    %known = call i64 ld64(53312)
+    %yes = icmp.ne i64 %known, 0
+    condbr %yes, send(), tick(t0)
+  tick(t0: i64):
+    %now = call i64 ld64(0)
+    %el = sub i64 %now, t0
+    %over = icmp.sgt i64 %el, 250
+    condbr %over, noreply(), await(t0)
+  send():
+    call void st64(53320, 0)
+    call void echo_ask()
+    %t0 = call i64 ld64(0)
+    br await2(%t0)
+  await2(t0: i64):
+    call void net_poll()
+    %got = call i64 ld64(53320)
+    %yes = icmp.ne i64 %got, 0
+    condbr %yes, reply(), tick2(t0)
+  tick2(t0: i64):
+    %now = call i64 ld64(0)
+    %el = sub i64 %now, t0
+    %over = icmp.sgt i64 %el, 250
+    condbr %over, noreply(), await2(t0)
+  reply():
+    %s = call ptr s_pingok()
+    call void con_write(%s)
+    ret
+  noreply():
+    %s = call ptr s_pingno()
+    call void con_write(%s)
+    ret
+}

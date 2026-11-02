@@ -1,0 +1,670 @@
+
+; K0 template part 4: storage. An ATA PIO driver (primary bus,
+; 28-bit LBA) and the k0fs filesystem, all in Krell above the
+; port I/O services. Disk layout (512-byte sectors):
+;   LBA 0       superblock: magic "K0FS", then i64 fields
+;               total_sectors +8, dir_start +16, dir_sectors +24,
+;               data_start +32, bump +40, file_count +48
+;   LBA 1..64   directory: entries of 64 bytes (name 48 bytes
+;               NUL-padded, start LBA i64 at +48, length i64
+;               at +56; an entry is used iff start != 0)
+;   LBA 65..    file data, bump-allocated (an overwrite allocates
+;               a new run; the old run is not reclaimed)
+; State (arena): 49152 present flag, 49160 total sectors,
+;   49168 bump LBA, 49176 file count, 49184 base LBA added to
+;   every sector access (0 for a standalone filesystem image;
+;   8192 when the filesystem sits behind the boot area of the
+;   bootable image - fs_init probes both). Sector buffer
+;   at 49664.
+
+fn ata_wait() -> i64 {
+  entry():
+    %e1 = iconst i64 1
+    br loop(0)
+  loop(n: i64):
+    %st32 = call i32 k_in8(503)
+    %st = zext i64 %st32
+    %bsy = and i64 %st, 128
+    %clr = icmp.eq i64 %bsy, 0
+    condbr %clr, chk(%st), spin(n)
+  chk(st: i64):
+    %err = and i64 %st, 1
+    %bad = icmp.ne i64 %err, 0
+    condbr %bad, fail(), ok()
+  ok():
+    ret 0
+  fail():
+    ret -1
+  spin(n: i64):
+    %n2 = add i64 n, 1
+    %over = icmp.sgt i64 %n2, 4000000
+    condbr %over, fail(), loop(%n2)
+}
+
+fn ata_drq() -> i64 {
+  entry():
+    br loop(0)
+  loop(n: i64):
+    %st32 = call i32 k_in8(503)
+    %st = zext i64 %st32
+    %err = and i64 %st, 1
+    %bad = icmp.ne i64 %err, 0
+    condbr %bad, fail(), chk(%st, n)
+  chk(st: i64, n: i64):
+    %w = and i64 %st, 136
+    %rdy = icmp.eq i64 %w, 8
+    condbr %rdy, ok(), spin(n)
+  ok():
+    ret 0
+  fail():
+    ret -1
+  spin(n: i64):
+    %n2 = add i64 n, 1
+    %over = icmp.sgt i64 %n2, 4000000
+    condbr %over, fail(), loop(%n2)
+}
+
+fn ata_setup(i64, i32) -> void {
+  entry(lba: i64, cmd: i32):
+    %base = call i64 ld64(49184)
+    %lb = add i64 lba, %base
+    %h = lshr i64 %lb, 24
+    %h2 = and i64 %h, 15
+    %h3 = or i64 %h2, 224
+    %h32 = trunc i32 %h3
+    call void k_out8(502, %h32)
+    %one = iconst i32 1
+    call void k_out8(498, %one)
+    %b0 = and i64 %lb, 255
+    %b0_32 = trunc i32 %b0
+    call void k_out8(499, %b0_32)
+    %b1 = lshr i64 %lb, 8
+    %b1b = and i64 %b1, 255
+    %b1_32 = trunc i32 %b1b
+    call void k_out8(500, %b1_32)
+    %b2 = lshr i64 %lb, 16
+    %b2b = and i64 %b2, 255
+    %b2_32 = trunc i32 %b2b
+    call void k_out8(501, %b2_32)
+    call void k_out8(503, cmd)
+    ret
+}
+
+fn ata_read1(i64, i64) -> i64 {
+  entry(lba: i64, buf: i64):
+    %cmd = iconst i32 32
+    call void ata_setup(lba, %cmd)
+    %w = call i64 ata_drq()
+    %bad = icmp.ne i64 %w, 0
+    condbr %bad, fail(), rd(buf, 0)
+  rd(buf: i64, i: i64):
+    %done = icmp.sge i64 i, 256
+    condbr %done, ok(), body(buf, i)
+  body(buf: i64, i: i64):
+    %w32 = call i32 k_in16(496)
+    %w = zext i64 %w32
+    %lo = and i64 %w, 255
+    %a = add i64 buf, i
+    %a2 = add i64 %a, i
+    call void mstore8(%a2, %lo)
+    %hi = lshr i64 %w, 8
+    %a3 = add i64 %a2, 1
+    call void mstore8(%a3, %hi)
+    %i2 = add i64 i, 1
+    br rd(buf, %i2)
+  ok():
+    ret 0
+  fail():
+    ret -1
+}
+
+fn ata_write1(i64, i64) -> i64 {
+  entry(lba: i64, buf: i64):
+    %cmd = iconst i32 48
+    call void ata_setup(lba, %cmd)
+    %w = call i64 ata_drq()
+    %bad = icmp.ne i64 %w, 0
+    condbr %bad, fail(), wr(buf, 0)
+  wr(buf: i64, i: i64):
+    %done = icmp.sge i64 i, 256
+    condbr %done, flush(), body(buf, i)
+  body(buf: i64, i: i64):
+    %a = add i64 buf, i
+    %a2 = add i64 %a, i
+    %lo = call i64 mload8(%a2)
+    %a3 = add i64 %a2, 1
+    %hi = call i64 mload8(%a3)
+    %hi8 = shl i64 %hi, 8
+    %w = or i64 %lo, %hi8
+    %w32 = trunc i32 %w
+    call void k_out16(496, %w32)
+    %i2 = add i64 i, 1
+    br wr(buf, %i2)
+  flush():
+    %fc = iconst i32 234
+    call void k_out8(503, %fc)
+    %r = call i64 ata_wait()
+    ret %r
+  ok():
+    ret 0
+  fail():
+    ret -1
+}
+
+fn ata_read(i64, i64, i64) -> i64 {
+  entry(lba: i64, n: i64, buf: i64):
+    br loop(lba, n, buf, 0)
+  loop(lba: i64, n: i64, buf: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, ok(), body(lba, n, buf, i)
+  body(lba: i64, n: i64, buf: i64, i: i64):
+    %l = add i64 lba, i
+    %off = shl i64 i, 9
+    %b = add i64 buf, %off
+    %r = call i64 ata_read1(%l, %b)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, fail(), next(lba, n, buf, i)
+  next(lba: i64, n: i64, buf: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(lba, n, buf, %i2)
+  ok():
+    ret 0
+  fail():
+    ret -1
+}
+
+fn ata_write(i64, i64, i64) -> i64 {
+  entry(lba: i64, n: i64, buf: i64):
+    br loop(lba, n, buf, 0)
+  loop(lba: i64, n: i64, buf: i64, i: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, ok(), body(lba, n, buf, i)
+  body(lba: i64, n: i64, buf: i64, i: i64):
+    %l = add i64 lba, i
+    %off = shl i64 i, 9
+    %b = add i64 buf, %off
+    %r = call i64 ata_write1(%l, %b)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, fail(), next(lba, n, buf, i)
+  next(lba: i64, n: i64, buf: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(lba, n, buf, %i2)
+  ok():
+    ret 0
+  fail():
+    ret -1
+}
+
+fn fs_buf() -> i64 {
+  entry():
+    %p = call ptr ksf(49664)
+    %a = bitcast i64 %p
+    ret %a
+}
+
+fn fs_init() -> void {
+  entry():
+    %emagic = iconst i64 1397108811
+    call void st64(49152, 0)
+    call void st64(49184, 0)
+    %st32 = call i32 k_in8(503)
+    %st = zext i64 %st32
+    %none = icmp.eq i64 %st, 255
+    condbr %none, fin(), rd()
+  rd():
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(0, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, probe2(), magic(%buf)
+  magic(buf: i64):
+    %m = call i64 mload32(buf)
+    %ok = icmp.eq i64 %m, 1397108811
+    condbr %ok, fill(buf), probe2()
+  probe2():
+    call void st64(49184, 8192)
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(0, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, absent(), magic2(%buf)
+  magic2(buf: i64):
+    %m = call i64 mload32(buf)
+    %ok = icmp.eq i64 %m, 1397108811
+    condbr %ok, fill(buf), absent()
+  absent():
+    call void st64(49184, 0)
+    br fin()
+  fill(buf: i64):
+    %a8 = add i64 buf, 8
+    %tot = call i64 mload(%a8)
+    call void st64(49160, %tot)
+    %a40 = add i64 buf, 40
+    %bump = call i64 mload(%a40)
+    call void st64(49168, %bump)
+    %a48 = add i64 buf, 48
+    %cnt = call i64 mload(%a48)
+    call void st64(49176, %cnt)
+    call void st64(49152, 1)
+    br fin()
+  fin():
+    ret
+}
+
+fn fs_sync_super() -> void {
+  entry():
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(0, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, fin(), patch(%buf)
+  patch(buf: i64):
+    %bump = call i64 ld64(49168)
+    %a40 = add i64 buf, 40
+    call void mstore(%a40, %bump)
+    %cnt = call i64 ld64(49176)
+    %a48 = add i64 buf, 48
+    call void mstore(%a48, %cnt)
+    %w = call i64 ata_write1(0, %buf)
+    br fin()
+  fin():
+    ret
+}
+
+; name match: token at host address tp with length tl vs the
+; NUL-padded 48-byte entry name at host address ep
+fn name_match(i64, i64, i64) -> i64 {
+  entry(tp: i64, tl: i64, ep: i64):
+    %e1 = iconst i64 1
+    br loop(tp, tl, ep, 0)
+  loop(tp: i64, tl: i64, ep: i64, i: i64):
+    %done = icmp.sge i64 i, tl
+    condbr %done, tail(ep, tl), body(tp, tl, ep, i)
+  body(tp: i64, tl: i64, ep: i64, i: i64):
+    %a = add i64 tp, i
+    %c1 = call i64 mload8(%a)
+    %b = add i64 ep, i
+    %c2 = call i64 mload8(%b)
+    %eq = icmp.eq i64 %c1, %c2
+    condbr %eq, next(tp, tl, ep, i), no()
+  next(tp: i64, tl: i64, ep: i64, i: i64):
+    %i2 = add i64 i, 1
+    br loop(tp, tl, ep, %i2)
+  tail(ep: i64, tl: i64):
+    %b = add i64 ep, tl
+    %c = call i64 mload8(%b)
+    %z = icmp.eq i64 %c, 0
+    condbr %z, yes(), no()
+  yes():
+    ret 1
+  no():
+    ret 0
+}
+
+; find a file by name; returns the directory sector LBA in
+; 49200 and the slot in 49208, or -1 in 49200 when absent
+fn fs_find(i64, i64) -> void {
+  entry(tp: i64, tl: i64):
+    %e49200 = iconst i64 49200
+    br sec(tp, tl, 1)
+  sec(tp: i64, tl: i64, lba: i64):
+    %over = icmp.sgt i64 lba, 64
+    condbr %over, absent(), rd(tp, tl, lba)
+  rd(tp: i64, tl: i64, lba: i64):
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(lba, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, absent(), scan(tp, tl, lba, %buf, 0)
+  scan(tp: i64, tl: i64, lba: i64, buf: i64, slot: i64):
+    %done = icmp.sge i64 slot, 8
+    condbr %done, nextsec(tp, tl, lba), escan(tp, tl, lba, buf, slot)
+  escan(tp: i64, tl: i64, lba: i64, buf: i64, slot: i64):
+    %off = shl i64 slot, 6
+    %ep = add i64 buf, %off
+    %sa = add i64 %ep, 48
+    %start = call i64 mload(%sa)
+    %used = icmp.ne i64 %start, 0
+    condbr %used, match(tp, tl, lba, buf, slot, %ep), nextslot(tp, tl, lba, buf, slot)
+  match(tp: i64, tl: i64, lba: i64, buf: i64, slot: i64, ep: i64):
+    %m = call i64 name_match(tp, tl, ep)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, found(lba, slot), nextslot(tp, tl, lba, buf, slot)
+  nextslot(tp: i64, tl: i64, lba: i64, buf: i64, slot: i64):
+    %s2 = add i64 slot, 1
+    br scan(tp, tl, lba, buf, %s2)
+  nextsec(tp: i64, tl: i64, lba: i64):
+    %l2 = add i64 lba, 1
+    br sec(tp, tl, %l2)
+  found(lba: i64, slot: i64):
+    call void st64(49200, lba)
+    call void st64(49208, slot)
+    ret
+  absent():
+    call void st64(49200, -1)
+    ret
+}
+
+; find the first free directory slot (same result convention)
+fn fs_freeslot() -> void {
+  entry():
+    %e49200 = iconst i64 49200
+    br sec(1)
+  sec(lba: i64):
+    %over = icmp.sgt i64 lba, 64
+    condbr %over, absent(), rd(lba)
+  rd(lba: i64):
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(lba, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, absent(), scan(lba, %buf, 0)
+  scan(lba: i64, buf: i64, slot: i64):
+    %done = icmp.sge i64 slot, 8
+    condbr %done, nextsec(lba), escan(lba, buf, slot)
+  escan(lba: i64, buf: i64, slot: i64):
+    %off = shl i64 slot, 6
+    %ep = add i64 buf, %off
+    %sa = add i64 %ep, 48
+    %start = call i64 mload(%sa)
+    %free = icmp.eq i64 %start, 0
+    condbr %free, found(lba, slot), nextslot(lba, buf, slot)
+  nextslot(lba: i64, buf: i64, slot: i64):
+    %s2 = add i64 slot, 1
+    br scan(lba, buf, %s2)
+  nextsec(lba: i64):
+    %l2 = add i64 lba, 1
+    br sec(%l2)
+  found(lba: i64, slot: i64):
+    call void st64(49200, lba)
+    call void st64(49208, slot)
+    ret
+  absent():
+    call void st64(49200, -1)
+    ret
+}
+
+fn print_name(i64) -> void {
+  entry(ep: i64):
+    br loop(ep, 0)
+  loop(ep: i64, i: i64):
+    %over = icmp.sge i64 i, 48
+    condbr %over, fin(), body(ep, i)
+  body(ep: i64, i: i64):
+    %a = add i64 ep, i
+    %c = call i64 mload8(%a)
+    %z = icmp.eq i64 %c, 0
+    condbr %z, fin(), put(ep, i, %c)
+  put(ep: i64, i: i64, c: i64):
+    call void con_putc(c)
+    %i2 = add i64 i, 1
+    br loop(ep, %i2)
+  fin():
+    ret
+}
+
+fn cmd_dir() -> void {
+  entry():
+    %p = call i64 ld64(49152)
+    %no = icmp.eq i64 %p, 0
+    condbr %no, nodisk(), sec(1)
+  nodisk():
+    %s = call ptr s_nodisk()
+    call void con_write(%s)
+    ret
+  sec(lba: i64):
+    %over = icmp.sgt i64 lba, 64
+    condbr %over, fin(), rd(lba)
+  rd(lba: i64):
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(lba, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, nextsec(lba), scan(lba, %buf, 0)
+  scan(lba: i64, buf: i64, slot: i64):
+    %done = icmp.sge i64 slot, 8
+    condbr %done, nextsec(lba), escan(lba, buf, slot)
+  escan(lba: i64, buf: i64, slot: i64):
+    %off = shl i64 slot, 6
+    %ep = add i64 buf, %off
+    %sa = add i64 %ep, 48
+    %start = call i64 mload(%sa)
+    %used = icmp.ne i64 %start, 0
+    condbr %used, show(lba, buf, slot, %ep), nextslot(lba, buf, slot)
+  show(lba: i64, buf: i64, slot: i64, ep: i64):
+    call void print_name(ep)
+    call void con_putc(32)
+    %la = add i64 ep, 56
+    %len = call i64 mload(%la)
+    call void putu(%len)
+    %s = call ptr s_fsbytes()
+    call void con_write(%s)
+    br nextslot(lba, buf, slot)
+  nextslot(lba: i64, buf: i64, slot: i64):
+    %s2 = add i64 slot, 1
+    br scan(lba, buf, %s2)
+  nextsec(lba: i64):
+    %l2 = add i64 lba, 1
+    br sec(%l2)
+  fin():
+    ret
+}
+
+; split the rest pointer: first token (name) in 49216 (address)
+; and 49224 (length); remainder address in 49232. The rest
+; pointer arrives as a ptr; addresses here are host addresses.
+fn split_name(ptr) -> void {
+  entry(rest: ptr):
+    %e32 = iconst i64 32
+    %e1 = iconst i64 1
+    %p = bitcast i64 rest
+    call void st64(49216, %p)
+    br scan(%p, %p)
+  scan(p: i64, start: i64):
+    %c = call i64 mload8(p)
+    %end = icmp.eq i64 %c, 0
+    condbr %end, have(p, start), sp(p, start, %c)
+  sp(p: i64, start: i64, c: i64):
+    %is = icmp.eq i64 c, 32
+    condbr %is, have(p, start), next(p, start)
+  next(p: i64, start: i64):
+    %p2 = add i64 p, 1
+    br scan(%p2, start)
+  have(p: i64, start: i64):
+    %tl = sub i64 p, start
+    call void st64(49224, %tl)
+    br sksp(p)
+  sksp(p: i64):
+    %c = call i64 mload8(p)
+    %is = icmp.eq i64 %c, 32
+    condbr %is, adv(p), done(p)
+  adv(p: i64):
+    %p2 = add i64 p, 1
+    br sksp(%p2)
+  done(p: i64):
+    call void st64(49232, p)
+    ret
+}
+
+fn cmd_cat(ptr) -> void {
+  entry(rest: ptr):
+    %e1 = iconst i64 1
+    %e49208 = iconst i64 49208
+    %p = call i64 ld64(49152)
+    %no = icmp.eq i64 %p, 0
+    condbr %no, nodisk(), go(rest)
+  nodisk():
+    %s = call ptr s_nodisk()
+    call void con_write(%s)
+    ret
+  go(rest: ptr):
+    call void split_name(rest)
+    %tp = call i64 ld64(49216)
+    %tl = call i64 ld64(49224)
+    call void fs_find(%tp, %tl)
+    %lba = call i64 ld64(49200)
+    %miss = icmp.slt i64 %lba, 0
+    condbr %miss, nofile(), rdsec(%lba)
+  nofile():
+    %s = call ptr s_catno()
+    call void con_write(%s)
+    ret
+  rdsec(lba: i64):
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(lba, %buf)
+    %slot = call i64 ld64(49208)
+    %off = shl i64 %slot, 6
+    %ep = add i64 %buf, %off
+    %sa = add i64 %ep, 48
+    %start = call i64 mload(%sa)
+    %la = add i64 %ep, 56
+    %len = call i64 mload(%la)
+    call void st64(49240, %start)
+    call void st64(49248, %len)
+    br sec(%start, %len, 0)
+  sec(start: i64, len: i64, i: i64):
+    %off = shl i64 i, 9
+    %done = icmp.sge i64 %off, len
+    condbr %done, fin(), rd(start, len, i)
+  rd(start: i64, len: i64, i: i64):
+    %buf = call i64 fs_buf()
+    %l = add i64 start, i
+    %r = call i64 ata_read1(%l, %buf)
+    %off = shl i64 i, 9
+    %rem = sub i64 len, %off
+    %lt = icmp.slt i64 %rem, 512
+    %take = select i64 %lt, %rem, 512
+    br emit(%buf, %take, start, len, i)
+  emit(buf: i64, take: i64, start: i64, len: i64, i: i64):
+    br ploop(buf, take, start, len, i, 0)
+  ploop(buf: i64, take: i64, start: i64, len: i64, i: i64, j: i64):
+    %done = icmp.sge i64 j, take
+    condbr %done, nextsec(start, len, i), pbody(buf, take, start, len, i, j)
+  pbody(buf: i64, take: i64, start: i64, len: i64, i: i64, j: i64):
+    %a = add i64 buf, j
+    %c = call i64 mload8(%a)
+    call void con_putc(%c)
+    %j2 = add i64 j, 1
+    br ploop(buf, take, start, len, i, %j2)
+  nextsec(start: i64, len: i64, i: i64):
+    %i2 = add i64 i, 1
+    br sec(start, len, %i2)
+  fin():
+    ret
+}
+
+fn cmd_store(ptr) -> void {
+  entry(rest: ptr):
+    %e1 = iconst i64 1
+    %e6 = iconst i64 6
+    %e48 = iconst i64 48
+    %e56 = iconst i64 56
+    %e49208 = iconst i64 49208
+    %p = call i64 ld64(49152)
+    %no = icmp.eq i64 %p, 0
+    condbr %no, nodisk(), go(rest)
+  nodisk():
+    %s = call ptr s_nodisk()
+    call void con_write(%s)
+    ret
+  go(rest: ptr):
+    call void split_name(rest)
+    %tp = call i64 ld64(49216)
+    %tl = call i64 ld64(49224)
+    %bad = icmp.eq i64 %tl, 0
+    %long = icmp.sgt i64 %tl, 47
+    %bz = zext i64 %bad
+    %lz = zext i64 %long
+    %either = or i64 %bz, %lz
+    %is = icmp.ne i64 %either, 0
+    condbr %is, usage(), have(%tp, %tl)
+  usage():
+    %s = call ptr s_storeuse()
+    call void con_write(%s)
+    ret
+  have(tp: i64, tl: i64):
+    %txt = call i64 ld64(49232)
+    br tlen(%txt, %txt)
+  tlen(p: i64, start: i64):
+    %c = call i64 mload8(p)
+    %z = icmp.eq i64 %c, 0
+    condbr %z, sized(start, p), tnext(p, start)
+  tnext(p: i64, start: i64):
+    %p2 = add i64 p, 1
+    br tlen(%p2, start)
+  sized(start: i64, end: i64):
+    %len = sub i64 end, start
+    call void st64(49256, %len)
+    %bump = call i64 ld64(49168)
+    %bytes = add i64 %len, 511
+    %need = lshr i64 %bytes, 9
+    %tot = call i64 ld64(49160)
+    %after = add i64 %bump, %need
+    %full = icmp.sgt i64 %after, %tot
+    condbr %full, full(), write(start, %len, %bump, %need)
+  full():
+    %s = call ptr s_storefull()
+    call void con_write(%s)
+    ret
+  write(start: i64, len: i64, bump: i64, need: i64):
+    br wloop(start, len, bump, need, 0)
+  wloop(start: i64, len: i64, bump: i64, need: i64, i: i64):
+    %done = icmp.sge i64 i, need
+    condbr %done, dirent(start, len, bump, need), wsec(start, len, bump, need, i)
+  wsec(start: i64, len: i64, bump: i64, need: i64, i: i64):
+    %buf = call i64 fs_buf()
+    %off = shl i64 i, 9
+    %src = add i64 start, %off
+    %rem = sub i64 len, %off
+    %lt = icmp.slt i64 %rem, 512
+    %take = select i64 %lt, %rem, 512
+    call void mzero(%buf, 512)
+    call void copy_bytes(%buf, %src, %take)
+    %l = add i64 bump, i
+    %r = call i64 ata_write1(%l, %buf)
+    %i2 = add i64 i, 1
+    br wloop(start, len, bump, need, %i2)
+  dirent(start: i64, len: i64, bump: i64, need: i64):
+    %nb = add i64 bump, need
+    call void st64(49168, %nb)
+    %tp = call i64 ld64(49216)
+    %tl = call i64 ld64(49224)
+    call void fs_find(%tp, %tl)
+    %lba = call i64 ld64(49200)
+    %found = icmp.sge i64 %lba, 0
+    condbr %found, upd(%lba, len, bump), new(len, bump)
+  upd(lba: i64, len: i64, bump: i64):
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(lba, %buf)
+    %slot = call i64 ld64(49208)
+    %off = shl i64 %slot, 6
+    %ep = add i64 %buf, %off
+    %sa = add i64 %ep, 48
+    call void mstore(%sa, bump)
+    %la = add i64 %ep, 56
+    call void mstore(%la, len)
+    %w = call i64 ata_write1(lba, %buf)
+    call void fs_sync_super()
+    br fin()
+  new(len: i64, bump: i64):
+    call void fs_freeslot()
+    %lba = call i64 ld64(49200)
+    %miss = icmp.slt i64 %lba, 0
+    condbr %miss, full(), nent(%lba, len, bump)
+  nent(lba: i64, len: i64, bump: i64):
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(lba, %buf)
+    %slot = call i64 ld64(49208)
+    %off = shl i64 %slot, 6
+    %ep = add i64 %buf, %off
+    call void mzero(%ep, 64)
+    %tp = call i64 ld64(49216)
+    %tl = call i64 ld64(49224)
+    call void copy_bytes(%ep, %tp, %tl)
+    %sa = add i64 %ep, 48
+    call void mstore(%sa, bump)
+    %la = add i64 %ep, 56
+    call void mstore(%la, len)
+    %w = call i64 ata_write1(lba, %buf)
+    %cnt = call i64 ld64(49176)
+    %cnt2 = add i64 %cnt, 1
+    call void st64(49176, %cnt2)
+    call void fs_sync_super()
+    br fin()
+  fin():
+    ret
+}

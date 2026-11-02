@@ -1,0 +1,460 @@
+; K0 - a kernel in pure Krell.
+;
+; Boot, console, serial, physical memory, interrupt dispatch,
+; the PIC and the PIT, the PS/2 keyboard, a cooperative
+; scheduler and a small shell: every line of it is Krell,
+; compiled by krellc to native x86_64 and linked freestanding
+; against boot.s.
+;
+; The machine layer is twelve services wide (boot.s):
+;   k_out8, k_in8          port I/O, byte
+;   k_out16, k_in16        port I/O, word
+;   k_out32, k_in32        port I/O, dword
+;   k_lidt                 load the interrupt table register
+;   k_sti, k_cli, k_hlt    interrupt control
+;   k_stub_base            the interrupt stub table address
+;   k_arena_base           the 1 MiB kernel state arena
+; Everything else - including building the IDT itself, entry
+; by entry, in memory - is done here, in Krell.
+;
+; Kernel state lives in the arena at fixed byte offsets:
+;   0x0000 ticks (i64)        0x0008 seconds (i64)
+;   0x0010 cursor x (i64)     0x0018 cursor y (i64)
+;   0x0020 kbd head (i64)     0x0028 kbd tail (i64)
+;   0x0030 keyboard ring, 256 bytes
+;   0x0130 shell line buffer, 160 bytes
+;   0x01D0 line length (i64)  0x01D8 shift flag (i64)
+;   0x01E0 pmm total frames   0x01E8 pmm free frames
+;   0x01F0 RAM in KiB         0x01F8 last allocated frame
+;   0x0200 task table, 4 slots of 48 bytes:
+;          +0 period, +8 next due tick, +16 work, +24 state
+;   0x1000 physical memory bitmap, 16 KiB (512 MiB of frames)
+;   0x8000 the IDT, 4 KiB     0x9000 the IDTR
+;   0xA000 scratch (decimal digits)
+;   0xB000 heap state (t3)    0xB100 module table (t3)
+;   0xB300 runner instance (t3)
+;   0xC000 ATA/FS state (t4)  0xC200 sector buffer, 512 bytes
+;   0xD000 net state (t6)     0xD100 e1000 descriptor rings
+;   0xE000 e1000 packet buffers (to 0x13000)
+;   0x13000 framebuffer state (t5)
+
+@@DATA@@
+
+extern k_out8(i32, i32) -> void
+extern k_in8(i32) -> i32
+extern k_out16(i32, i32) -> void
+extern k_in16(i32) -> i32
+extern k_out32(i32, i32) -> void
+extern k_in32(i32) -> i32
+extern k_lidt(ptr) -> void
+extern k_sti() -> void
+extern k_cli() -> void
+extern k_hlt() -> void
+extern k_stub_base() -> i64
+extern k_arena_base() -> i64
+extern k_exec(i64) -> i64
+
+; ---- arena access ---------------------------------------------
+
+fn ks() -> ptr {
+  entry():
+    %a = call i64 k_arena_base()
+    %p = bitcast ptr %a
+    ret %p
+}
+
+fn ksf(i64) -> ptr {
+  entry(off: i64):
+    %b = call ptr ks()
+    %p = gep i8 %b, off
+    ret %p
+}
+
+fn ld64(i64) -> i64 {
+  entry(off: i64):
+    %p = call ptr ksf(off)
+    %v = load i64, %p
+    ret %v
+}
+
+fn st64(i64, i64) -> void {
+  entry(off: i64, v: i64):
+    %p = call ptr ksf(off)
+    store i64 %p, v
+    ret
+}
+
+fn zero_range(i64, i64) -> void {
+  entry(off: i64, n: i64):
+    br loop(0, off, n)
+  loop(i: i64, off: i64, n: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(i, off, n)
+  body(i: i64, off: i64, n: i64):
+    %o = add i64 off, i
+    %p = call ptr ksf(%o)
+    store i8 %p, 0
+    %i2 = add i64 i, 1
+    br loop(%i2, off, n)
+  fin():
+    ret
+}
+
+; ---- serial (COM1, polled) -------------------------------------
+
+fn ser_init() -> void {
+  entry():
+    call void k_out8(0x3f9, 0)
+    call void k_out8(0x3fb, 128)
+    call void k_out8(0x3f8, 1)
+    call void k_out8(0x3f9, 0)
+    call void k_out8(0x3fb, 3)
+    call void k_out8(0x3fa, 199)
+    call void k_out8(0x3fc, 11)
+    ret
+}
+
+fn ser_putc(i64) -> void {
+  entry(c: i64):
+    br poll(c)
+  poll(c: i64):
+    %lsr = call i32 k_in8(0x3fd)
+    %v = zext i64 %lsr
+    %rdy = and i64 %v, 32
+    %ok = icmp.ne i64 %rdy, 0
+    condbr %ok, send(c), poll(c)
+  send(c: i64):
+    %b = trunc i32 c
+    call void k_out8(0x3f8, %b)
+    ret
+}
+
+; ---- VGA text console -------------------------------------------
+
+fn cellptr(i64, i64) -> ptr {
+  entry(x: i64, y: i64):
+    %row = mul i64 y, 80
+    %idx = add i64 %row, x
+    %off = mul i64 %idx, 2
+    %addr = add i64 753664, %off
+    %p = bitcast ptr %addr
+    ret %p
+}
+
+fn cell_write(i64, i64, i64, i64) -> void {
+  entry(x: i64, y: i64, ch: i64, attr: i64):
+    %p = call ptr cellptr(x, y)
+    %a8 = shl i64 attr, 8
+    %v = or i64 %a8, ch
+    %v16 = trunc i16 %v
+    store i16 %p, %v16
+    ret
+}
+
+fn cursor_update() -> void {
+  entry():
+    %x = call i64 ld64(16)
+    %y = call i64 ld64(24)
+    %row = mul i64 %y, 80
+    %pos = add i64 %row, %x
+    %lo = and i64 %pos, 255
+    %lo32 = trunc i32 %lo
+    call void k_out8(0x3d4, 15)
+    call void k_out8(0x3d5, %lo32)
+    %hi = lshr i64 %pos, 8
+    %hi2 = and i64 %hi, 255
+    %hi32 = trunc i32 %hi2
+    call void k_out8(0x3d4, 14)
+    call void k_out8(0x3d5, %hi32)
+    ret
+}
+
+fn scroll() -> void {
+  entry():
+    %e0 = iconst i64 0
+    %e80 = iconst i64 80
+    %e24 = iconst i64 24
+    br rows(1)
+  rows(y: i64):
+    %done = icmp.sge i64 y, 24
+    condbr %done, clr(), copy(y)
+  copy(y: i64):
+    br cells(y, 0)
+  cells(y: i64, x: i64):
+    %done = icmp.sge i64 x, 80
+    condbr %done, next(y), one(y, x)
+  one(y: i64, x: i64):
+    %y1 = add i64 y, 1
+    %src = call ptr cellptr(x, %y1)
+    %v = load i16, %src
+    %dst = call ptr cellptr(x, y)
+    store i16 %dst, %v
+    %x2 = add i64 x, 1
+    br cells(y, %x2)
+  next(y: i64):
+    %y2 = add i64 y, 1
+    br rows(%y2)
+  clr():
+    br clrc(0)
+  clrc(x: i64):
+    %done = icmp.sge i64 x, 80
+    condbr %done, fin(), cone(x)
+  cone(x: i64):
+    call void cell_write(x, 24, 32, 7)
+    %x2 = add i64 x, 1
+    br clrc(%x2)
+  fin():
+    ret
+}
+
+fn con_putc_a(i64, i64) -> void {
+  entry(c: i64, attr: i64):
+    %e0 = iconst i64 0
+    %e1 = iconst i64 1
+    %e16 = iconst i64 16
+    %e24 = iconst i64 24
+    %isn = icmp.eq i64 c, 10
+    condbr %isn, nl(attr), chkcr(c, attr)
+  chkcr(c: i64, attr: i64):
+    %isc = icmp.eq i64 c, 13
+    condbr %isc, cr(attr), chkbs(c, attr)
+  cr(attr: i64):
+    call void st64(16, 0)
+    br tail(attr)
+  chkbs(c: i64, attr: i64):
+    %isb = icmp.eq i64 c, 8
+    condbr %isb, bs(attr), pr(c, attr)
+  bs(attr: i64):
+    %x = call i64 ld64(16)
+    %gt = icmp.sgt i64 %x, 0
+    condbr %gt, bsgo(%x, attr), tail(attr)
+  bsgo(x: i64, attr: i64):
+    %x2 = sub i64 %x, 1
+    call void st64(16, %x2)
+    %y = call i64 ld64(24)
+    call void cell_write(%x2, %y, 32, 7)
+    br tail(attr)
+  nl(attr: i64):
+    call void st64(16, 0)
+    %y = call i64 ld64(24)
+    %y2 = add i64 %y, 1
+    call void st64(24, %y2)
+    br maybescroll(attr)
+  pr(c: i64, attr: i64):
+    %x = call i64 ld64(16)
+    %y = call i64 ld64(24)
+    call void cell_write(%x, %y, c, attr)
+    %x2 = add i64 %x, 1
+    %wrap = icmp.sge i64 %x2, 80
+    condbr %wrap, wrap(attr), adv(%x2, attr)
+  adv(x: i64, attr: i64):
+    call void st64(16, x)
+    br tail(attr)
+  wrap(attr: i64):
+    call void st64(16, 0)
+    %y = call i64 ld64(24)
+    %y2 = add i64 %y, 1
+    call void st64(24, %y2)
+    br maybescroll(attr)
+  maybescroll(attr: i64):
+    %y = call i64 ld64(24)
+    %over = icmp.sgt i64 %y, 24
+    condbr %over, doscroll(attr), tail(attr)
+  doscroll(attr: i64):
+    call void scroll()
+    call void st64(24, 24)
+    br tail(attr)
+  tail(attr: i64):
+    call void cursor_update()
+    ret
+}
+
+fn con_putc(i64) -> void {
+  entry(c: i64):
+    call void ser_putc(c)
+    %fb = call i64 ld64(77824)
+    %on = icmp.eq i64 %fb, 1
+    condbr %on, fb(c), vga(c)
+  fb(c: i64):
+    call void fb_putc(c)
+    ret
+  vga(c: i64):
+    call void con_putc_a(c, 7)
+    ret
+}
+
+fn con_write(ptr) -> void {
+  entry(p: ptr):
+    br loop(p, 0)
+  loop(p: ptr, i: i64):
+    %a = gep i8 p, i
+    %b = load i8, %a
+    %v = zext i64 %b
+    %done = icmp.eq i64 %v, 0
+    condbr %done, fin(), body(p, i, %v)
+  body(p: ptr, i: i64, v: i64):
+    call void con_putc(v)
+    %i2 = add i64 i, 1
+    br loop(p, %i2)
+  fin():
+    ret
+}
+
+fn con_write_a(ptr, i64) -> void {
+  entry(p: ptr, attr: i64):
+    br loop(p, 0, attr)
+  loop(p: ptr, i: i64, attr: i64):
+    %a = gep i8 p, i
+    %b = load i8, %a
+    %v = zext i64 %b
+    %done = icmp.eq i64 %v, 0
+    condbr %done, fin(), body(p, i, attr, %v)
+  body(p: ptr, i: i64, attr: i64, v: i64):
+    call void ser_putc(v)
+    call void con_putc_a(v, attr)
+    %i2 = add i64 i, 1
+    br loop(p, %i2, attr)
+  fin():
+    ret
+}
+
+fn str_at(i64, i64, ptr, i64) -> void {
+  entry(x: i64, y: i64, p: ptr, attr: i64):
+    br loop(x, y, p, attr, 0)
+  loop(x: i64, y: i64, p: ptr, attr: i64, i: i64):
+    %a = gep i8 p, i
+    %b = load i8, %a
+    %v = zext i64 %b
+    %done = icmp.eq i64 %v, 0
+    condbr %done, fin(), body(x, y, p, attr, i, %v)
+  body(x: i64, y: i64, p: ptr, attr: i64, i: i64, v: i64):
+    %cx = add i64 x, i
+    call void cell_write(%cx, y, v, attr)
+    %i2 = add i64 i, 1
+    br loop(x, y, p, attr, %i2)
+  fin():
+    ret
+}
+
+; Decimal digits of v, written reversed into buf. Returns count.
+fn digits(i64, ptr) -> i64 {
+  entry(v: i64, buf: ptr):
+    br fill(v, 0, buf)
+  fill(v: i64, n: i64, buf: ptr):
+    %d = urem i64 v, 10
+    %ch = add i64 %d, 48
+    %a = gep i8 buf, n
+    %t = trunc i8 %ch
+    store i8 %a, %t
+    %q = udiv i64 v, 10
+    %n2 = add i64 n, 1
+    %more = icmp.ne i64 %q, 0
+    condbr %more, fill(%q, %n2, buf), fin(%n2)
+  fin(n: i64):
+    ret n
+}
+
+fn putu(i64) -> void {
+  entry(v: i64):
+    %buf = call ptr ksf(40960)
+    %n = call i64 digits(v, %buf)
+    br emit(%n, 0, %buf)
+  emit(n: i64, i: i64, buf: ptr):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(n, i, buf)
+  body(n: i64, i: i64, buf: ptr):
+    %nm1 = sub i64 n, 1
+    %j = sub i64 %nm1, i
+    %a = gep i8 buf, %j
+    %b = load i8, %a
+    %v = zext i64 %b
+    call void con_putc(%v)
+    %i2 = add i64 i, 1
+    br emit(n, %i2, buf)
+  fin():
+    ret
+}
+
+fn num_at(i64, i64, i64, i64) -> void {
+  entry(x: i64, y: i64, v: i64, attr: i64):
+    %buf = call ptr ksf(40960)
+    %n = call i64 digits(v, %buf)
+    br emit(x, y, %n, 0, %buf, attr)
+  emit(x: i64, y: i64, n: i64, i: i64, buf: ptr, attr: i64):
+    %done = icmp.sge i64 i, n
+    condbr %done, fin(), body(x, y, n, i, buf, attr)
+  body(x: i64, y: i64, n: i64, i: i64, buf: ptr, attr: i64):
+    %nm1 = sub i64 n, 1
+    %j = sub i64 %nm1, i
+    %a = gep i8 buf, %j
+    %b = load i8, %a
+    %v = zext i64 %b
+    %cx = add i64 x, i
+    call void cell_write(%cx, y, %v, attr)
+    %i2 = add i64 i, 1
+    br emit(x, y, n, %i2, buf, attr)
+  fin():
+    ret
+}
+
+fn fill_rows(i64, i64, i64) -> void {
+  entry(y0: i64, y1: i64, attr: i64):
+    %e1 = iconst i64 1
+    br rows(y0, y1, attr)
+  rows(y: i64, y1: i64, attr: i64):
+    %done = icmp.sgt i64 y, y1
+    condbr %done, fin(), cols(y, y1, attr, 0)
+  cols(y: i64, y1: i64, attr: i64, x: i64):
+    %done = icmp.sge i64 x, 80
+    condbr %done, next(y, y1, attr), one(y, y1, attr, x)
+  one(y: i64, y1: i64, attr: i64, x: i64):
+    call void cell_write(x, y, 32, attr)
+    %x2 = add i64 x, 1
+    br cols(y, y1, attr, %x2)
+  next(y: i64, y1: i64, attr: i64):
+    %y2 = add i64 y, 1
+    br rows(%y2, y1, attr)
+  fin():
+    ret
+}
+
+fn bar_paint() -> void {
+  entry():
+    call void fill_rows(0, 0, 31)
+    %t = call ptr s_bark0()
+    call void str_at(1, 0, %t, 31)
+    %u = call ptr s_barup()
+    call void str_at(5, 0, %u, 31)
+    %sec = call i64 ld64(8)
+    call void num_at(12, 0, %sec, 31)
+    %s = call ptr s_barunit()
+    call void str_at(19, 0, %s, 31)
+    %tk = call ptr s_bartick()
+    call void str_at(22, 0, %tk, 31)
+    %tv = call i64 ld64(0)
+    call void num_at(28, 0, %tv, 31)
+    %f = call ptr s_barfree()
+    call void str_at(38, 0, %f, 31)
+    %fv = call i64 ld64(488)
+    call void num_at(50, 0, %fv, 31)
+    ret
+}
+
+fn con_init() -> void {
+  entry():
+    call void fill_rows(0, 24, 7)
+    call void st64(16, 0)
+    call void st64(24, 1)
+    call void bar_paint()
+    call void cursor_update()
+    ret
+}
+
+fn clear_text() -> void {
+  entry():
+    call void fill_rows(1, 24, 7)
+    call void st64(16, 0)
+    call void st64(24, 1)
+    call void cursor_update()
+    ret
+}
