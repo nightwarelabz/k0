@@ -150,28 +150,16 @@ assert len(TAB_PLAIN) == 58 and len(TAB_SHIFT) == 58
 blobs = []  # (accessor, [bytes])
 for name, text in STRINGS:
     blobs.append((name, list(text.encode("ascii")) + [0]))
-# 8x16 bitmap font for the framebuffer console, rendered from
-# DejaVu Sans Mono: glyphs for characters 32..127, 16 bytes each,
-# one byte per row, MSB = leftmost pixel.
-def _make_font():
-    from PIL import Image, ImageDraw, ImageFont
-    f = ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 16)
-    out = []
-    for ch in range(32, 128):
-        img = Image.new("L", (10, 20), 0)
-        d = ImageDraw.Draw(img)
-        d.text((0, -2), chr(ch), fill=255, font=f)
-        img = img.resize((8, 16))
-        for y in range(16):
-            byte = 0
-            for x in range(8):
-                if img.getpixel((x, y)) > 100:
-                    byte |= 1 << (7 - x)
-            out.append(byte)
-    return out
+# 8x16 bitmap font for the framebuffer console: glyphs for
+# characters 32..127, 16 bytes each, one byte per row, MSB =
+# leftmost pixel. The rendered bytes are checked in as
+# font.inc so building needs no font renderer; regenerate
+# font.inc with tools/make_font.py.
+FONT = [int(tok) for tok in
+        (HERE / "font.inc").read_text().replace("\n", " ").split(",")
+        if tok.strip()]
+assert len(FONT) == 1536
 
-FONT = _make_font()
 blobs.append(("font", FONT))
 blobs.append(("spin", SPIN))
 blobs.append(("tab1", TAB_PLAIN))
