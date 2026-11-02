@@ -11,7 +11,11 @@
 ;   LBA 65..    file data, bump-allocated (an overwrite allocates
 ;               a new run; the old run is not reclaimed)
 ; State (arena): 49152 present flag, 49160 total sectors,
-;   49168 bump LBA, 49176 file count. Sector buffer at 49664.
+;   49168 bump LBA, 49176 file count, 49184 base LBA added to
+;   every sector access (0 for a standalone filesystem image;
+;   8192 when the filesystem sits behind the boot area of the
+;   bootable image - fs_init probes both). Sector buffer
+;   at 49664.
 
 fn ata_wait() -> i64 {
   entry():
@@ -62,21 +66,23 @@ fn ata_drq() -> i64 {
 
 fn ata_setup(i64, i32) -> void {
   entry(lba: i64, cmd: i32):
-    %h = lshr i64 lba, 24
+    %base = call i64 ld64(49184)
+    %lb = add i64 lba, %base
+    %h = lshr i64 %lb, 24
     %h2 = and i64 %h, 15
     %h3 = or i64 %h2, 224
     %h32 = trunc i32 %h3
     call void k_out8(502, %h32)
     %one = iconst i32 1
     call void k_out8(498, %one)
-    %b0 = and i64 lba, 255
+    %b0 = and i64 %lb, 255
     %b0_32 = trunc i32 %b0
     call void k_out8(499, %b0_32)
-    %b1 = lshr i64 lba, 8
+    %b1 = lshr i64 %lb, 8
     %b1b = and i64 %b1, 255
     %b1_32 = trunc i32 %b1b
     call void k_out8(500, %b1_32)
-    %b2 = lshr i64 lba, 16
+    %b2 = lshr i64 %lb, 16
     %b2b = and i64 %b2, 255
     %b2_32 = trunc i32 %b2b
     call void k_out8(501, %b2_32)
@@ -198,7 +204,9 @@ fn fs_buf() -> i64 {
 
 fn fs_init() -> void {
   entry():
+    %emagic = iconst i64 1397108811
     call void st64(49152, 0)
+    call void st64(49184, 0)
     %st32 = call i32 k_in8(503)
     %st = zext i64 %st32
     %none = icmp.eq i64 %st, 255
@@ -207,11 +215,24 @@ fn fs_init() -> void {
     %buf = call i64 fs_buf()
     %r = call i64 ata_read1(0, %buf)
     %bad = icmp.ne i64 %r, 0
-    condbr %bad, fin(), magic(%buf)
+    condbr %bad, probe2(), magic(%buf)
   magic(buf: i64):
     %m = call i64 mload32(buf)
     %ok = icmp.eq i64 %m, 1397108811
-    condbr %ok, fill(buf), fin()
+    condbr %ok, fill(buf), probe2()
+  probe2():
+    call void st64(49184, 8192)
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(0, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, absent(), magic2(%buf)
+  magic2(buf: i64):
+    %m = call i64 mload32(buf)
+    %ok = icmp.eq i64 %m, 1397108811
+    condbr %ok, fill(buf), absent()
+  absent():
+    call void st64(49184, 0)
+    br fin()
   fill(buf: i64):
     %a8 = add i64 buf, 8
     %tot = call i64 mload(%a8)

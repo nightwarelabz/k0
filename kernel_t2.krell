@@ -888,9 +888,25 @@ fn exec_line() -> void {
     %c = call ptr s_cping()
     %m = call i64 match(line, wlen, %c)
     %hit = icmp.ne i64 %m, 0
-    condbr %hit, doping(), dno(line, wlen)
+    condbr %hit, doping(), d18(line, wlen, rest)
   doping():
     call void cmd_ping()
+    ret
+  d18(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_ctcp()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dotcp(rest), d19(line, wlen, rest)
+  dotcp(rest: ptr):
+    call void cmd_tcp(rest)
+    ret
+  d19(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cnrun()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, donrun(rest), dno(line, wlen)
+  donrun(rest: ptr):
+    call void cmd_nrun(rest)
     ret
   dno(line: ptr, wlen: i64):
     %empty = icmp.eq i64 wlen, 0
@@ -1092,6 +1108,7 @@ fn main(i32, ptr) -> i32 {
     %hbase = call i64 ld64(45064)
     call void putu(%hbase)
     call void con_putc(10)
+    call void nat_init()
     call void fs_init()
     %fp = call ptr s_fsdisk()
     call void con_write(%fp)

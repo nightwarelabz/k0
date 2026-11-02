@@ -150,14 +150,14 @@ fn s_prompt() -> ptr {
     ret %p
 }
 
-data d_help: i8 = { 99, 111, 109, 109, 97, 110, 100, 115, 58, 32, 104, 101, 108, 112, 32, 97, 98, 111, 117, 116, 32, 109, 101, 109, 32, 116, 105, 99, 107, 115, 32, 112, 115, 32, 97, 108, 108, 111, 99, 32, 102, 114, 101, 101, 32, 99, 108, 101, 97, 114, 32, 101, 99, 104, 111, 32, 104, 101, 97, 112, 32, 104, 116, 101, 115, 116, 32, 109, 111, 100, 115, 32, 114, 117, 110, 32, 100, 105, 114, 32, 99, 97, 116, 32, 115, 116, 111, 114, 101, 32, 112, 105, 110, 103, 10, 32, 32, 97, 108, 108, 111, 99, 32, 32, 116, 97, 107, 101, 32, 97, 32, 52, 32, 75, 105, 66, 32, 102, 114, 97, 109, 101, 32, 97, 110, 100, 32, 119, 114, 105, 116, 101, 32, 97, 32, 116, 101, 115, 116, 32, 112, 97, 116, 116, 101, 114, 110, 10, 32, 32, 102, 114, 101, 101, 32, 32, 32, 103, 105, 118, 101, 32, 116, 104, 101, 32, 102, 114, 97, 109, 101, 32, 98, 97, 99, 107, 10, 32, 32, 104, 101, 97, 112, 32, 32, 32, 104, 101, 97, 112, 32, 115, 116, 97, 116, 101, 58, 32, 98, 97, 115, 101, 44, 32, 102, 114, 101, 101, 32, 98, 121, 116, 101, 115, 44, 32, 108, 105, 118, 101, 32, 98, 108, 111, 99, 107, 115, 44, 32, 108, 97, 114, 103, 101, 115, 116, 32, 98, 108, 111, 99, 107, 10, 32, 32, 104, 116, 101, 115, 116, 32, 32, 104, 101, 97, 112, 32, 115, 101, 108, 102, 45, 116, 101, 115, 116, 58, 32, 112, 97, 116, 116, 101, 114, 110, 115, 44, 32, 114, 101, 117, 115, 101, 44, 32, 99, 111, 97, 108, 101, 115, 99, 105, 110, 103, 10, 32, 32, 112, 115, 32, 32, 32, 32, 32, 116, 104, 101, 32, 115, 99, 104, 101, 100, 117, 108, 101, 114, 32, 116, 97, 98, 108, 101, 32, 119, 105, 116, 104, 32, 119, 111, 114, 107, 32, 99, 111, 117, 110, 116, 101, 114, 115, 10, 0 }
+data d_help: i8 = { 99, 111, 109, 109, 97, 110, 100, 115, 58, 32, 104, 101, 108, 112, 32, 97, 98, 111, 117, 116, 32, 109, 101, 109, 32, 116, 105, 99, 107, 115, 32, 112, 115, 32, 97, 108, 108, 111, 99, 32, 102, 114, 101, 101, 32, 99, 108, 101, 97, 114, 32, 101, 99, 104, 111, 32, 104, 101, 97, 112, 32, 104, 116, 101, 115, 116, 32, 109, 111, 100, 115, 32, 114, 117, 110, 32, 110, 114, 117, 110, 32, 100, 105, 114, 32, 99, 97, 116, 32, 115, 116, 111, 114, 101, 32, 112, 105, 110, 103, 32, 116, 99, 112, 10, 32, 32, 97, 108, 108, 111, 99, 32, 32, 116, 97, 107, 101, 32, 97, 32, 52, 32, 75, 105, 66, 32, 102, 114, 97, 109, 101, 32, 97, 110, 100, 32, 119, 114, 105, 116, 101, 32, 97, 32, 116, 101, 115, 116, 32, 112, 97, 116, 116, 101, 114, 110, 10, 32, 32, 102, 114, 101, 101, 32, 32, 32, 103, 105, 118, 101, 32, 116, 104, 101, 32, 102, 114, 97, 109, 101, 32, 98, 97, 99, 107, 10, 32, 32, 104, 101, 97, 112, 32, 32, 32, 104, 101, 97, 112, 32, 115, 116, 97, 116, 101, 58, 32, 98, 97, 115, 101, 44, 32, 102, 114, 101, 101, 32, 98, 121, 116, 101, 115, 44, 32, 108, 105, 118, 101, 32, 98, 108, 111, 99, 107, 115, 44, 32, 108, 97, 114, 103, 101, 115, 116, 32, 98, 108, 111, 99, 107, 10, 32, 32, 104, 116, 101, 115, 116, 32, 32, 104, 101, 97, 112, 32, 115, 101, 108, 102, 45, 116, 101, 115, 116, 58, 32, 112, 97, 116, 116, 101, 114, 110, 115, 44, 32, 114, 101, 117, 115, 101, 44, 32, 99, 111, 97, 108, 101, 115, 99, 105, 110, 103, 10, 32, 32, 116, 99, 112, 32, 32, 32, 32, 116, 99, 112, 32, 60, 112, 111, 114, 116, 62, 32, 60, 116, 101, 120, 116, 62, 58, 32, 99, 111, 110, 110, 101, 99, 116, 32, 116, 111, 32, 49, 48, 46, 48, 46, 50, 46, 50, 32, 111, 110, 32, 116, 104, 101, 32, 112, 111, 114, 116, 44, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 115, 101, 110, 100, 32, 116, 104, 101, 32, 116, 101, 120, 116, 44, 32, 112, 114, 105, 110, 116, 32, 116, 104, 101, 32, 114, 101, 112, 108, 121, 10, 32, 32, 110, 114, 117, 110, 32, 32, 32, 110, 114, 117, 110, 32, 60, 105, 110, 100, 101, 120, 62, 58, 32, 114, 117, 110, 32, 97, 32, 110, 97, 116, 105, 118, 101, 32, 109, 111, 100, 117, 108, 101, 32, 40, 99, 111, 109, 112, 105, 108, 101, 100, 32, 75, 114, 101, 108, 108, 41, 10, 32, 32, 112, 115, 32, 32, 32, 32, 32, 116, 104, 101, 32, 115, 99, 104, 101, 100, 117, 108, 101, 114, 32, 116, 97, 98, 108, 101, 32, 119, 105, 116, 104, 32, 119, 111, 114, 107, 32, 99, 111, 117, 110, 116, 101, 114, 115, 10, 0 }
 fn s_help() -> ptr {
   entry():
     %p = dataptr 16
     ret %p
 }
 
-data d_about: i8 = { 75, 48, 58, 32, 98, 111, 111, 116, 44, 32, 99, 111, 110, 115, 111, 108, 101, 44, 32, 115, 101, 114, 105, 97, 108, 44, 32, 112, 104, 121, 115, 105, 99, 97, 108, 32, 109, 101, 109, 111, 114, 121, 44, 32, 105, 110, 116, 101, 114, 114, 117, 112, 116, 115, 44, 10, 107, 101, 121, 98, 111, 97, 114, 100, 44, 32, 115, 99, 104, 101, 100, 117, 108, 101, 114, 44, 32, 115, 104, 101, 108, 108, 44, 32, 104, 101, 97, 112, 44, 32, 109, 111, 100, 117, 108, 101, 32, 114, 117, 110, 110, 101, 114, 44, 10, 102, 105, 108, 101, 115, 121, 115, 116, 101, 109, 44, 32, 102, 114, 97, 109, 101, 98, 117, 102, 102, 101, 114, 32, 99, 111, 110, 115, 111, 108, 101, 32, 97, 110, 100, 32, 110, 101, 116, 119, 111, 114, 107, 32, 100, 114, 105, 118, 101, 114, 32, 45, 10, 97, 108, 108, 32, 119, 114, 105, 116, 116, 101, 110, 32, 105, 110, 32, 75, 114, 101, 108, 108, 46, 10, 84, 104, 101, 32, 109, 97, 99, 104, 105, 110, 101, 32, 108, 97, 121, 101, 114, 32, 105, 115, 32, 116, 119, 101, 108, 118, 101, 32, 115, 101, 114, 118, 105, 99, 101, 115, 32, 105, 110, 32, 98, 111, 111, 116, 46, 115, 46, 10, 0 }
+data d_about: i8 = { 75, 48, 58, 32, 98, 111, 111, 116, 44, 32, 99, 111, 110, 115, 111, 108, 101, 44, 32, 115, 101, 114, 105, 97, 108, 44, 32, 112, 104, 121, 115, 105, 99, 97, 108, 32, 109, 101, 109, 111, 114, 121, 44, 32, 105, 110, 116, 101, 114, 114, 117, 112, 116, 115, 44, 10, 107, 101, 121, 98, 111, 97, 114, 100, 44, 32, 115, 99, 104, 101, 100, 117, 108, 101, 114, 44, 32, 115, 104, 101, 108, 108, 44, 32, 104, 101, 97, 112, 44, 32, 109, 111, 100, 117, 108, 101, 32, 114, 117, 110, 110, 101, 114, 44, 10, 102, 105, 108, 101, 115, 121, 115, 116, 101, 109, 44, 32, 102, 114, 97, 109, 101, 98, 117, 102, 102, 101, 114, 32, 99, 111, 110, 115, 111, 108, 101, 32, 97, 110, 100, 32, 110, 101, 116, 119, 111, 114, 107, 32, 100, 114, 105, 118, 101, 114, 32, 45, 10, 97, 108, 108, 32, 119, 114, 105, 116, 116, 101, 110, 32, 105, 110, 32, 75, 114, 101, 108, 108, 46, 10, 84, 104, 101, 32, 109, 97, 99, 104, 105, 110, 101, 32, 108, 97, 121, 101, 114, 32, 105, 115, 32, 116, 104, 105, 114, 116, 101, 101, 110, 32, 115, 101, 114, 118, 105, 99, 101, 115, 32, 105, 110, 32, 98, 111, 111, 116, 46, 115, 46, 10, 0 }
 fn s_about() -> ptr {
   entry():
     %p = dataptr 17
@@ -584,164 +584,227 @@ fn s_cping() -> ptr {
     ret %p
 }
 
+data d_ctcp: i8 = { 116, 99, 112, 0 }
+fn s_ctcp() -> ptr {
+  entry():
+    %p = dataptr 78
+    ret %p
+}
+
+data d_tcpuse: i8 = { 117, 115, 97, 103, 101, 58, 32, 116, 99, 112, 32, 60, 112, 111, 114, 116, 62, 32, 60, 116, 101, 120, 116, 62, 10, 0 }
+fn s_tcpuse() -> ptr {
+  entry():
+    %p = dataptr 79
+    ret %p
+}
+
+data d_tcpfail: i8 = { 116, 99, 112, 58, 32, 99, 111, 110, 110, 101, 99, 116, 32, 102, 97, 105, 108, 101, 100, 10, 0 }
+fn s_tcpfail() -> ptr {
+  entry():
+    %p = dataptr 80
+    ret %p
+}
+
+data d_tcpnorep: i8 = { 116, 99, 112, 58, 32, 110, 111, 32, 114, 101, 112, 108, 121, 10, 0 }
+fn s_tcpnorep() -> ptr {
+  entry():
+    %p = dataptr 81
+    ret %p
+}
+
+data d_tcpclosed: i8 = { 116, 99, 112, 58, 32, 99, 108, 111, 115, 101, 100, 10, 0 }
+fn s_tcpclosed() -> ptr {
+  entry():
+    %p = dataptr 82
+    ret %p
+}
+
+data d_cnrun: i8 = { 110, 114, 117, 110, 0 }
+fn s_cnrun() -> ptr {
+  entry():
+    %p = dataptr 83
+    ret %p
+}
+
+data d_natuse: i8 = { 117, 115, 97, 103, 101, 58, 32, 110, 114, 117, 110, 32, 60, 105, 110, 100, 101, 120, 62, 10, 0 }
+fn s_natuse() -> ptr {
+  entry():
+    %p = dataptr 84
+    ret %p
+}
+
+data d_natno: i8 = { 110, 114, 117, 110, 58, 32, 110, 111, 32, 115, 117, 99, 104, 32, 109, 111, 100, 117, 108, 101, 10, 0 }
+fn s_natno() -> ptr {
+  entry():
+    %p = dataptr 85
+    ret %p
+}
+
+data d_natbad: i8 = { 110, 114, 117, 110, 58, 32, 110, 111, 116, 32, 97, 32, 110, 97, 116, 105, 118, 101, 32, 109, 111, 100, 117, 108, 101, 10, 0 }
+fn s_natbad() -> ptr {
+  entry():
+    %p = dataptr 86
+    ret %p
+}
+
 data d_netpre: i8 = { 107, 48, 58, 32, 110, 101, 116, 119, 111, 114, 107, 58, 32, 0 }
 fn s_netpre() -> ptr {
   entry():
-    %p = dataptr 78
+    %p = dataptr 87
     ret %p
 }
 
 data d_netmac: i8 = { 101, 49, 48, 48, 48, 32, 109, 97, 99, 32, 0 }
 fn s_netmac() -> ptr {
   entry():
-    %p = dataptr 79
+    %p = dataptr 88
     ret %p
 }
 
 data d_netip: i8 = { 32, 105, 112, 32, 49, 48, 46, 48, 46, 50, 46, 49, 53, 10, 0 }
 fn s_netip() -> ptr {
   entry():
-    %p = dataptr 80
+    %p = dataptr 89
     ret %p
 }
 
 data d_netno: i8 = { 110, 111, 32, 110, 101, 116, 119, 111, 114, 107, 10, 0 }
 fn s_netno() -> ptr {
   entry():
-    %p = dataptr 81
+    %p = dataptr 90
     ret %p
 }
 
 data d_pingok: i8 = { 114, 101, 112, 108, 121, 32, 102, 114, 111, 109, 32, 49, 48, 46, 48, 46, 50, 46, 50, 58, 32, 105, 99, 109, 112, 95, 115, 101, 113, 61, 49, 10, 0 }
 fn s_pingok() -> ptr {
   entry():
-    %p = dataptr 82
+    %p = dataptr 91
     ret %p
 }
 
 data d_pingno: i8 = { 112, 105, 110, 103, 58, 32, 110, 111, 32, 114, 101, 112, 108, 121, 10, 0 }
 fn s_pingno() -> ptr {
   entry():
-    %p = dataptr 83
+    %p = dataptr 92
     ret %p
 }
 
 data d_fbpre: i8 = { 107, 48, 58, 32, 102, 114, 97, 109, 101, 98, 117, 102, 102, 101, 114, 58, 32, 0 }
 fn s_fbpre() -> ptr {
   entry():
-    %p = dataptr 84
+    %p = dataptr 93
     ret %p
 }
 
 data d_fbx: i8 = { 120, 0 }
 fn s_fbx() -> ptr {
   entry():
-    %p = dataptr 85
+    %p = dataptr 94
     ret %p
 }
 
 data d_fbbpp: i8 = { 44, 32, 51, 50, 32, 98, 112, 112, 44, 32, 116, 101, 120, 116, 32, 0 }
 fn s_fbbpp() -> ptr {
   entry():
-    %p = dataptr 86
+    %p = dataptr 95
     ret %p
 }
 
 data d_fbcols: i8 = { 120, 0 }
 fn s_fbcols() -> ptr {
   entry():
-    %p = dataptr 87
+    %p = dataptr 96
     ret %p
 }
 
 data d_fbend: i8 = { 10, 0 }
 fn s_fbend() -> ptr {
   entry():
-    %p = dataptr 88
+    %p = dataptr 97
     ret %p
 }
 
 data d_catno: i8 = { 99, 97, 116, 58, 32, 110, 111, 32, 115, 117, 99, 104, 32, 102, 105, 108, 101, 10, 0 }
 fn s_catno() -> ptr {
   entry():
-    %p = dataptr 89
+    %p = dataptr 98
     ret %p
 }
 
 data d_storeuse: i8 = { 117, 115, 97, 103, 101, 58, 32, 115, 116, 111, 114, 101, 32, 60, 110, 97, 109, 101, 62, 32, 60, 116, 101, 120, 116, 62, 10, 0 }
 fn s_storeuse() -> ptr {
   entry():
-    %p = dataptr 90
+    %p = dataptr 99
     ret %p
 }
 
 data d_storefull: i8 = { 115, 116, 111, 114, 101, 58, 32, 100, 105, 115, 107, 32, 102, 117, 108, 108, 10, 0 }
 fn s_storefull() -> ptr {
   entry():
-    %p = dataptr 91
+    %p = dataptr 100
     ret %p
 }
 
 data d_runpre: i8 = { 114, 117, 110, 58, 32, 0 }
 fn s_runpre() -> ptr {
   entry():
-    %p = dataptr 92
+    %p = dataptr 101
     ret %p
 }
 
 data d_runexit: i8 = { 101, 120, 105, 116, 32, 0 }
 fn s_runexit() -> ptr {
   entry():
-    %p = dataptr 93
+    %p = dataptr 102
     ret %p
 }
 
 data d_runfault: i8 = { 109, 111, 100, 117, 108, 101, 32, 102, 97, 117, 108, 116, 32, 0 }
 fn s_runfault() -> ptr {
   entry():
-    %p = dataptr 94
+    %p = dataptr 103
     ret %p
 }
 
 data d_runuse: i8 = { 117, 115, 97, 103, 101, 58, 32, 114, 117, 110, 32, 60, 105, 110, 100, 101, 120, 62, 10, 0 }
 fn s_runuse() -> ptr {
   entry():
-    %p = dataptr 95
+    %p = dataptr 104
     ret %p
 }
 
 data d_runno: i8 = { 114, 117, 110, 58, 32, 110, 111, 32, 115, 117, 99, 104, 32, 109, 111, 100, 117, 108, 101, 10, 0 }
 fn s_runno() -> ptr {
   entry():
-    %p = dataptr 96
+    %p = dataptr 105
     ret %p
 }
 
 data d_font: i8 = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 24, 24, 24, 24, 24, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 44, 44, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22, 22, 127, 36, 44, 254, 104, 72, 0, 0, 0, 0, 0, 0, 0, 0, 24, 124, 96, 120, 60, 14, 2, 126, 24, 0, 0, 0, 0, 0, 0, 112, 144, 208, 102, 24, 100, 10, 27, 14, 4, 0, 0, 0, 0, 0, 0, 56, 96, 32, 48, 112, 219, 206, 198, 126, 16, 0, 0, 0, 0, 0, 0, 24, 24, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 24, 24, 16, 16, 16, 16, 16, 24, 8, 8, 0, 0, 0, 0, 0, 48, 16, 24, 24, 8, 8, 8, 24, 24, 16, 48, 0, 0, 0, 0, 0, 16, 16, 60, 60, 16, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 16, 126, 24, 24, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 24, 16, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 6, 4, 12, 8, 24, 16, 48, 32, 96, 64, 0, 0, 0, 0, 0, 0, 60, 100, 70, 70, 90, 70, 70, 102, 60, 16, 0, 0, 0, 0, 0, 0, 56, 24, 8, 24, 24, 24, 24, 8, 60, 60, 0, 0, 0, 0, 0, 0, 124, 68, 6, 6, 12, 24, 16, 32, 124, 60, 0, 0, 0, 0, 0, 0, 60, 6, 6, 12, 28, 6, 6, 6, 124, 16, 0, 0, 0, 0, 0, 0, 12, 28, 28, 36, 108, 76, 126, 12, 12, 0, 0, 0, 0, 0, 0, 0, 124, 96, 96, 124, 4, 6, 6, 6, 124, 16, 0, 0, 0, 0, 0, 0, 60, 96, 64, 124, 102, 70, 70, 102, 60, 24, 0, 0, 0, 0, 0, 0, 126, 4, 4, 12, 8, 24, 24, 16, 48, 0, 0, 0, 0, 0, 0, 0, 60, 102, 70, 108, 60, 102, 70, 70, 124, 16, 0, 0, 0, 0, 0, 0, 60, 100, 70, 70, 102, 62, 6, 4, 60, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 24, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 24, 0, 0, 0, 24, 24, 16, 16, 0, 0, 0, 0, 0, 0, 2, 14, 120, 224, 56, 14, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 126, 0, 126, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 112, 30, 6, 28, 112, 0, 0, 0, 0, 0, 0, 0, 0, 60, 6, 6, 12, 24, 24, 16, 0, 16, 0, 0, 0, 0, 0, 0, 0, 8, 62, 66, 206, 146, 179, 178, 147, 222, 64, 32, 28, 0, 0, 0, 0, 24, 56, 60, 44, 36, 100, 126, 70, 194, 0, 0, 0, 0, 0, 0, 0, 124, 70, 70, 100, 124, 70, 66, 70, 126, 56, 0, 0, 0, 0, 0, 0, 60, 96, 96, 64, 64, 64, 96, 96, 62, 8, 0, 0, 0, 0, 0, 0, 120, 68, 70, 70, 70, 70, 70, 68, 124, 48, 0, 0, 0, 0, 0, 0, 126, 96, 96, 96, 124, 96, 96, 96, 124, 60, 0, 0, 0, 0, 0, 0, 126, 96, 96, 96, 124, 96, 96, 96, 96, 0, 0, 0, 0, 0, 0, 0, 60, 96, 64, 64, 68, 70, 66, 98, 62, 8, 0, 0, 0, 0, 0, 0, 70, 70, 70, 102, 126, 66, 70, 70, 70, 0, 0, 0, 0, 0, 0, 0, 124, 24, 24, 24, 24, 24, 24, 24, 60, 60, 0, 0, 0, 0, 0, 0, 60, 4, 4, 4, 4, 4, 4, 12, 120, 16, 0, 0, 0, 0, 0, 0, 70, 76, 88, 112, 120, 72, 76, 70, 70, 0, 0, 0, 0, 0, 0, 0, 96, 96, 96, 96, 96, 96, 96, 96, 126, 62, 0, 0, 0, 0, 0, 0, 230, 230, 230, 254, 218, 218, 194, 194, 194, 0, 0, 0, 0, 0, 0, 0, 102, 102, 118, 118, 82, 78, 78, 78, 70, 0, 0, 0, 0, 0, 0, 0, 60, 102, 70, 70, 66, 66, 70, 102, 60, 16, 0, 0, 0, 0, 0, 0, 124, 102, 98, 102, 126, 120, 96, 96, 96, 0, 0, 0, 0, 0, 0, 0, 60, 102, 70, 70, 66, 66, 70, 102, 60, 28, 4, 0, 0, 0, 0, 0, 124, 70, 70, 70, 124, 124, 68, 70, 66, 0, 0, 0, 0, 0, 0, 0, 60, 100, 64, 96, 60, 6, 6, 70, 124, 16, 0, 0, 0, 0, 0, 0, 254, 24, 24, 24, 24, 24, 24, 24, 24, 0, 0, 0, 0, 0, 0, 0, 70, 70, 70, 70, 70, 70, 70, 102, 124, 16, 0, 0, 0, 0, 0, 0, 194, 70, 70, 100, 36, 44, 60, 56, 24, 0, 0, 0, 0, 0, 0, 0, 195, 195, 218, 218, 122, 126, 110, 102, 102, 0, 0, 0, 0, 0, 0, 0, 70, 100, 60, 24, 24, 56, 36, 102, 194, 0, 0, 0, 0, 0, 0, 0, 194, 102, 36, 60, 24, 24, 24, 24, 24, 0, 0, 0, 0, 0, 0, 0, 126, 6, 12, 12, 24, 16, 48, 96, 126, 62, 0, 0, 0, 0, 0, 0, 24, 16, 16, 16, 16, 16, 16, 16, 16, 16, 28, 0, 0, 0, 0, 0, 64, 96, 32, 48, 16, 24, 8, 12, 4, 6, 0, 0, 0, 0, 0, 0, 56, 8, 8, 8, 8, 8, 8, 8, 8, 8, 56, 0, 0, 0, 0, 0, 24, 44, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 48, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 60, 6, 30, 126, 70, 70, 126, 16, 0, 0, 0, 0, 0, 0, 96, 64, 124, 102, 102, 98, 98, 102, 124, 8, 0, 0, 0, 0, 0, 0, 0, 0, 28, 48, 96, 96, 96, 96, 60, 8, 0, 0, 0, 0, 0, 0, 6, 6, 62, 102, 70, 70, 70, 70, 126, 16, 0, 0, 0, 0, 0, 0, 0, 0, 60, 102, 66, 126, 64, 96, 60, 24, 0, 0, 0, 0, 0, 0, 28, 16, 126, 16, 16, 16, 16, 16, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 62, 102, 70, 70, 70, 70, 126, 22, 4, 56, 0, 0, 0, 0, 96, 96, 124, 100, 102, 102, 102, 102, 102, 0, 0, 0, 0, 0, 0, 0, 24, 0, 56, 24, 24, 24, 24, 24, 60, 60, 0, 0, 0, 0, 0, 0, 8, 0, 56, 8, 8, 8, 8, 8, 8, 8, 24, 112, 0, 0, 0, 0, 96, 96, 102, 108, 120, 120, 108, 100, 102, 0, 0, 0, 0, 0, 0, 0, 112, 16, 16, 16, 16, 16, 16, 16, 28, 4, 0, 0, 0, 0, 0, 0, 0, 0, 124, 90, 90, 90, 90, 90, 90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 100, 102, 102, 102, 102, 102, 0, 0, 0, 0, 0, 0, 0, 0, 0, 56, 100, 70, 70, 70, 102, 60, 16, 0, 0, 0, 0, 0, 0, 0, 0, 124, 100, 102, 98, 98, 102, 124, 104, 64, 64, 0, 0, 0, 0, 0, 0, 62, 102, 70, 70, 70, 102, 62, 22, 6, 6, 0, 0, 0, 0, 0, 0, 62, 48, 48, 48, 48, 48, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 56, 96, 96, 56, 12, 6, 60, 16, 0, 0, 0, 0, 0, 0, 0, 48, 124, 48, 16, 16, 48, 16, 28, 12, 0, 0, 0, 0, 0, 0, 0, 0, 70, 102, 102, 102, 102, 102, 62, 16, 0, 0, 0, 0, 0, 0, 0, 0, 66, 70, 100, 36, 44, 56, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 131, 195, 194, 90, 126, 110, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 100, 56, 24, 56, 44, 102, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66, 102, 100, 36, 60, 24, 24, 24, 16, 96, 0, 0, 0, 0, 0, 0, 124, 4, 12, 24, 48, 32, 124, 60, 0, 0, 0, 0, 0, 0, 12, 24, 24, 24, 24, 48, 48, 24, 24, 24, 24, 12, 0, 0, 0, 0, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 16, 0, 0, 0, 48, 16, 24, 24, 24, 12, 24, 24, 24, 24, 16, 112, 0, 0, 0, 0, 0, 0, 0, 0, 32, 126, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 124, 126, 66, 66, 66, 66, 66, 66, 66, 66, 66, 126, 0, 0, 0 }
 fn s_font() -> ptr {
   entry():
-    %p = dataptr 97
+    %p = dataptr 106
     ret %p
 }
 
 data d_spin: i8 = { 124, 47, 45, 92 }
 fn s_spin() -> ptr {
   entry():
-    %p = dataptr 98
+    %p = dataptr 107
     ret %p
 }
 
 data d_tab1: i8 = { 0, 0, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 45, 61, 0, 0, 113, 119, 101, 114, 116, 121, 117, 105, 111, 112, 91, 93, 0, 0, 97, 115, 100, 102, 103, 104, 106, 107, 108, 59, 39, 96, 0, 92, 122, 120, 99, 118, 98, 110, 109, 44, 46, 47, 0, 0, 0, 32 }
 fn s_tab1() -> ptr {
   entry():
-    %p = dataptr 99
+    %p = dataptr 108
     ret %p
 }
 
 data d_tab2: i8 = { 0, 0, 33, 64, 35, 36, 37, 94, 38, 42, 40, 41, 95, 43, 0, 0, 81, 87, 69, 82, 84, 89, 85, 73, 79, 80, 123, 125, 0, 0, 65, 83, 68, 70, 71, 72, 74, 75, 76, 58, 34, 126, 0, 124, 90, 88, 67, 86, 66, 78, 77, 60, 62, 63, 0, 0, 0, 32 }
 fn s_tab2() -> ptr {
   entry():
-    %p = dataptr 100
+    %p = dataptr 109
     ret %p
 }
 
@@ -758,6 +821,7 @@ extern k_cli() -> void
 extern k_hlt() -> void
 extern k_stub_base() -> i64
 extern k_arena_base() -> i64
+extern k_exec(i64) -> i64
 
 ; ---- arena access ---------------------------------------------
 
@@ -5404,7 +5468,11 @@ fn cmd_run(ptr) -> void {
 ;   LBA 65..    file data, bump-allocated (an overwrite allocates
 ;               a new run; the old run is not reclaimed)
 ; State (arena): 49152 present flag, 49160 total sectors,
-;   49168 bump LBA, 49176 file count. Sector buffer at 49664.
+;   49168 bump LBA, 49176 file count, 49184 base LBA added to
+;   every sector access (0 for a standalone filesystem image;
+;   8192 when the filesystem sits behind the boot area of the
+;   bootable image - fs_init probes both). Sector buffer
+;   at 49664.
 
 fn ata_wait() -> i64 {
   entry():
@@ -5455,21 +5523,23 @@ fn ata_drq() -> i64 {
 
 fn ata_setup(i64, i32) -> void {
   entry(lba: i64, cmd: i32):
-    %h = lshr i64 lba, 24
+    %base = call i64 ld64(49184)
+    %lb = add i64 lba, %base
+    %h = lshr i64 %lb, 24
     %h2 = and i64 %h, 15
     %h3 = or i64 %h2, 224
     %h32 = trunc i32 %h3
     call void k_out8(502, %h32)
     %one = iconst i32 1
     call void k_out8(498, %one)
-    %b0 = and i64 lba, 255
+    %b0 = and i64 %lb, 255
     %b0_32 = trunc i32 %b0
     call void k_out8(499, %b0_32)
-    %b1 = lshr i64 lba, 8
+    %b1 = lshr i64 %lb, 8
     %b1b = and i64 %b1, 255
     %b1_32 = trunc i32 %b1b
     call void k_out8(500, %b1_32)
-    %b2 = lshr i64 lba, 16
+    %b2 = lshr i64 %lb, 16
     %b2b = and i64 %b2, 255
     %b2_32 = trunc i32 %b2b
     call void k_out8(501, %b2_32)
@@ -5591,7 +5661,9 @@ fn fs_buf() -> i64 {
 
 fn fs_init() -> void {
   entry():
+    %emagic = iconst i64 1397108811
     call void st64(49152, 0)
+    call void st64(49184, 0)
     %st32 = call i32 k_in8(503)
     %st = zext i64 %st32
     %none = icmp.eq i64 %st, 255
@@ -5600,11 +5672,24 @@ fn fs_init() -> void {
     %buf = call i64 fs_buf()
     %r = call i64 ata_read1(0, %buf)
     %bad = icmp.ne i64 %r, 0
-    condbr %bad, fin(), magic(%buf)
+    condbr %bad, probe2(), magic(%buf)
   magic(buf: i64):
     %m = call i64 mload32(buf)
     %ok = icmp.eq i64 %m, 1397108811
-    condbr %ok, fill(buf), fin()
+    condbr %ok, fill(buf), probe2()
+  probe2():
+    call void st64(49184, 8192)
+    %buf = call i64 fs_buf()
+    %r = call i64 ata_read1(0, %buf)
+    %bad = icmp.ne i64 %r, 0
+    condbr %bad, absent(), magic2(%buf)
+  magic2(buf: i64):
+    %m = call i64 mload32(buf)
+    %ok = icmp.eq i64 %m, 1397108811
+    condbr %ok, fill(buf), absent()
+  absent():
+    call void st64(49184, 0)
+    br fin()
   fill(buf: i64):
     %a8 = add i64 buf, 8
     %tot = call i64 mload(%a8)
@@ -6936,7 +7021,13 @@ fn handle_pkt(i64, i64) -> void {
     %a = add i64 buf, 23
     %pr = call i64 mload8(%a)
     %icmp = icmp.eq i64 %pr, 1
-    condbr %icmp, icmp(buf, len), fin()
+    condbr %icmp, icmp(buf, len), tcpchk(buf, len, %pr)
+  tcpchk(buf: i64, len: i64, pr: i64):
+    %istcp = icmp.eq i64 pr, 6
+    condbr %istcp, istcp(buf, len), fin()
+  istcp(buf: i64, len: i64):
+    call void tcp_handle(buf, len)
+    ret
   icmp(buf: i64, len: i64):
     call void icmp_handle(buf, len)
     ret
@@ -7194,6 +7285,696 @@ fn cmd_ping() -> void {
     call void con_write(%s)
     ret
 }
+; K0 template part 7: TCP. A single-connection TCP client on
+; top of the part 6 e1000 driver, ARP and IP. Active open
+; only: connect to a peer (the shell command targets the
+; gateway 10.0.2.2), send one payload, print what comes back
+; until the peer closes or a timeout expires. No retransmit
+; timers in this version: a lost handshake fails the command.
+; State (arena): 75776 state (0 idle, 1 SYN sent,
+; 2 established, 3 FIN sent), 75784 next send sequence,
+; 75792 next expected sequence, 75800 peer IP (4 bytes),
+; 75808 peer port, 75816 our port, 75824 received length,
+; 75832 peer FIN flag, 75840 receive staging (1024 bytes),
+; 76864 IP id counter, 76872 reply-printed flag.
+
+fn bget32(i64, i64) -> i64 {
+  entry(buf: i64, off: i64):
+    %hi = call i64 bget16(buf, off)
+    %o2 = add i64 off, 2
+    %lo = call i64 bget16(buf, %o2)
+    %h = shl i64 %hi, 16
+    %r = or i64 %h, %lo
+    ret %r
+}
+
+fn bput32(i64, i64, i64) -> void {
+  entry(buf: i64, off: i64, v: i64):
+    %hi = lshr i64 v, 16
+    call void bput16(buf, off, %hi)
+    %o2 = add i64 off, 2
+    %lo = and i64 v, 65535
+    call void bput16(buf, %o2, %lo)
+    ret
+}
+
+fn tcp_rxbuf() -> i64 {
+  entry():
+    %p = call ptr ksf(75840)
+    %a = bitcast i64 %p
+    ret %a
+}
+
+fn tcp_peer() -> i64 {
+  entry():
+    %base = call ptr ks()
+    %bp = bitcast i64 %base
+    %r = add i64 %bp, 75800
+    ret %r
+}
+
+fn tcp_sum(i64, i64) -> i64 {
+  entry(seg: i64, len: i64):
+    %our = call i64 ours()
+    %w1 = call i64 bget16(%our, 0)
+    %w2 = call i64 bget16(%our, 2)
+    %peer = call i64 tcp_peer()
+    %w3 = call i64 bget16(%peer, 0)
+    %w4 = call i64 bget16(%peer, 2)
+    %a1 = add i64 %w1, %w2
+    %a2 = add i64 %a1, %w3
+    %a3 = add i64 %a2, %w4
+    %a4 = add i64 %a3, 6
+    %a5 = add i64 %a4, len
+    br loop(seg, len, 0, %a5)
+  loop(seg: i64, len: i64, i: i64, acc: i64):
+    %nxt = add i64 i, 1
+    %has = icmp.slt i64 %nxt, len
+    condbr %has, body(seg, len, i, acc), tail(seg, len, acc)
+  body(seg: i64, len: i64, i: i64, acc: i64):
+    %w = call i64 bget16(seg, i)
+    %a2 = add i64 acc, %w
+    %i2 = add i64 i, 2
+    br loop(seg, len, %i2, %a2)
+  tail(seg: i64, len: i64, acc: i64):
+    %odd = and i64 len, 1
+    %is = icmp.ne i64 %odd, 0
+    condbr %is, oddb(seg, len, acc), fold(acc)
+  oddb(seg: i64, len: i64, acc: i64):
+    %li = sub i64 len, 1
+    %a = add i64 seg, %li
+    %b = call i64 mload8(%a)
+    %w = shl i64 %b, 8
+    %a2 = add i64 acc, %w
+    br fold(%a2)
+  fold(acc: i64):
+    %hi = lshr i64 acc, 16
+    %lo = and i64 acc, 65535
+    %s = add i64 %hi, %lo
+    %hi2 = lshr i64 %s, 16
+    %lo2 = and i64 %s, 65535
+    %s2 = add i64 %hi2, %lo2
+    %r = xor i64 %s2, 65535
+    ret %r
+}
+
+fn tcp_send(i64, i64, i64) -> void {
+  entry(flags: i64, dp: i64, dl: i64):
+    %e1 = iconst i64 1
+    %e54 = iconst i64 54
+    %tx = call i64 txbuf()
+    %gm = call i64 gwmac()
+    call void eth_write(%tx, %gm, 2048)
+    %id0 = call i64 ld64(76864)
+    %id = add i64 %id0, 1
+    call void st64(76864, %id)
+    %a14 = add i64 %tx, 14
+    call void mstore8(%a14, 69)
+    %a15 = add i64 %tx, 15
+    call void mstore8(%a15, 0)
+    %tot = add i64 dl, 40
+    call void bput16(%tx, 16, %tot)
+    call void bput16(%tx, 18, %id)
+    call void bput16(%tx, 20, 0)
+    %a22 = add i64 %tx, 22
+    call void mstore8(%a22, 64)
+    %a23 = add i64 %tx, 23
+    call void mstore8(%a23, 6)
+    %our = call i64 ours()
+    call void copy_ip(%tx, 26, %our)
+    %peer = call i64 tcp_peer()
+    call void copy_ip(%tx, 30, %peer)
+    call void bput16(%tx, 24, 0)
+    %hsum = call i64 ip_sum(%a14, 20)
+    call void bput16(%tx, 24, %hsum)
+    br thdr(%tx, flags, dp, dl)
+  thdr(tx: i64, flags: i64, dp: i64, dl: i64):
+    %op = call i64 ld64(75816)
+    call void bput16(tx, 34, %op)
+    %pp = call i64 ld64(75808)
+    call void bput16(tx, 36, %pp)
+    %seq = call i64 ld64(75784)
+    call void bput32(tx, 38, %seq)
+    %ackf = and i64 flags, 16
+    %has = icmp.ne i64 %ackf, 0
+    %rcv = call i64 ld64(75792)
+    %ackv = select i64 %has, %rcv, 0
+    call void bput32(tx, 42, %ackv)
+    %a46 = add i64 tx, 46
+    call void mstore8(%a46, 80)
+    %a47 = add i64 tx, 47
+    call void mstore8(%a47, flags)
+    call void bput16(tx, 48, 8192)
+    call void bput16(tx, 50, 0)
+    call void bput16(tx, 52, 0)
+    %nz = icmp.sgt i64 dl, 0
+    condbr %nz, pay(tx, flags, dp, dl), csum(tx, flags, dl)
+  pay(tx: i64, flags: i64, dp: i64, dl: i64):
+    %dst = add i64 tx, 54
+    call void copy_bytes(%dst, dp, dl)
+    br csum(tx, flags, dl)
+  csum(tx: i64, flags: i64, dl: i64):
+    %seg = add i64 tx, 34
+    %slen = add i64 dl, 20
+    %cs = call i64 tcp_sum(%seg, %slen)
+    call void bput16(tx, 50, %cs)
+    %fl = add i64 dl, 54
+    %small = icmp.slt i64 %fl, 60
+    %sl = select i64 %small, 60, %fl
+    call void net_send(%sl)
+    br acct(flags, dl)
+  acct(flags: i64, dl: i64):
+    %seq = call i64 ld64(75784)
+    %syn = and i64 flags, 2
+    %snz = icmp.ne i64 %syn, 0
+    %dl1 = add i64 dl, 1
+    %adv = select i64 %snz, %dl1, dl
+    %fin = and i64 flags, 1
+    %fnz = icmp.ne i64 %fin, 0
+    %advp = add i64 %adv, 1
+    %adv2 = select i64 %fnz, %advp, %adv
+    %ns = add i64 %seq, %adv2
+    %nsm = and i64 %ns, 4294967295
+    call void st64(75784, %nsm)
+    ret
+}
+
+fn tcp_handle(i64, i64) -> void {
+  entry(buf: i64, len: i64):
+    %e0 = iconst i64 0
+    %e1 = iconst i64 1
+    %e2 = iconst i64 2
+    %e4 = iconst i64 4
+    %e16 = iconst i64 16
+    %e1024 = iconst i64 1024
+    %e75776 = iconst i64 75776
+    %e75784 = iconst i64 75784
+    %e75792 = iconst i64 75792
+    %e75832 = iconst i64 75832
+    %emask = iconst i64 4294967295
+    %st = call i64 ld64(75776)
+    %idle = icmp.eq i64 %st, 0
+    condbr %idle, fin(), parse(buf, len, %st)
+  parse(buf: i64, len: i64, st: i64):
+    %b14 = add i64 buf, 14
+    %b = call i64 mload8(%b14)
+    %ihl4 = and i64 %b, 15
+    %ihl = shl i64 %ihl4, 2
+    %toff = add i64 %ihl, 14
+    %t = add i64 buf, %toff
+    %dport = call i64 bget16(%t, 2)
+    %op = call i64 ld64(75816)
+    %ok = icmp.eq i64 %dport, %op
+    condbr %ok, hdr(buf, len, st, %t, %ihl), fin()
+  hdr(buf: i64, len: i64, st: i64, t: i64, ihl: i64):
+    %sport = call i64 bget16(t, 0)
+    %pp = call i64 ld64(75808)
+    %ok = icmp.eq i64 %sport, %pp
+    condbr %ok, fields(buf, len, st, t, ihl), fin()
+  fields(buf: i64, len: i64, st: i64, t: i64, ihl: i64):
+    %seq = call i64 bget32(t, 4)
+    %ackv = call i64 bget32(t, 8)
+    %a12 = add i64 t, 12
+    %db = call i64 mload8(%a12)
+    %do4 = lshr i64 %db, 4
+    %doff = shl i64 %do4, 2
+    %a13 = add i64 t, 13
+    %fl = call i64 mload8(%a13)
+    %tot = call i64 bget16(buf, 16)
+    %thl = add i64 ihl, %doff
+    %paylen = sub i64 %tot, %thl
+    %pay = add i64 t, %doff
+    %synst = icmp.eq i64 st, 1
+    condbr %synst, synack(seq, ackv, %fl), est(seq, %fl, %paylen, %pay)
+  synack(seq: i64, ackv: i64, fl: i64):
+    %syn = and i64 fl, 2
+    %ackf = and i64 fl, 16
+    %s1 = icmp.ne i64 %syn, 0
+    %s2 = icmp.ne i64 %ackf, 0
+    %z1 = zext i64 %s1
+    %z2 = zext i64 %s2
+    %both = and i64 %z1, %z2
+    %snd = call i64 ld64(75784)
+    %aok = icmp.eq i64 ackv, %snd
+    %z3 = zext i64 %aok
+    %all = and i64 %both, %z3
+    %good = icmp.ne i64 %all, 0
+    condbr %good, estab(seq), fin()
+  estab(seq: i64):
+    %r = add i64 seq, 1
+    %rm = and i64 %r, 4294967295
+    call void st64(75792, %rm)
+    call void st64(75776, 2)
+    call void tcp_send(16, 0, 0)
+    ret
+  est(seq: i64, fl: i64, paylen: i64, pay: i64):
+    %rst = and i64 fl, 4
+    %isrst = icmp.ne i64 %rst, 0
+    condbr %isrst, gotrst(), est2(seq, fl, paylen, pay)
+  gotrst():
+    call void st64(75832, 1)
+    call void st64(75776, 0)
+    ret
+  est2(seq: i64, fl: i64, paylen: i64, pay: i64):
+    %pos = icmp.sgt i64 paylen, 0
+    condbr %pos, chkseq(seq, fl, paylen, pay), finchk(seq, fl, paylen, 0)
+  chkseq(seq: i64, fl: i64, paylen: i64, pay: i64):
+    %rcv = call i64 ld64(75792)
+    %ok = icmp.eq i64 seq, %rcv
+    condbr %ok, copy(seq, fl, paylen, pay), dupack()
+  dupack():
+    call void tcp_send(16, 0, 0)
+    ret
+  copy(seq: i64, fl: i64, paylen: i64, pay: i64):
+    %big = icmp.sgt i64 paylen, 1024
+    %n = select i64 %big, 1024, paylen
+    %dst = call i64 tcp_rxbuf()
+    call void copy_bytes(%dst, pay, %n)
+    call void st64(75824, %n)
+    %rcv = call i64 ld64(75792)
+    %nr = add i64 %rcv, paylen
+    %nrm = and i64 %nr, 4294967295
+    call void st64(75792, %nrm)
+    br finchk(seq, fl, paylen, 1)
+  finchk(seq: i64, fl: i64, paylen: i64, acked: i64):
+    %finb = and i64 fl, 1
+    %isfin = icmp.ne i64 %finb, 0
+    condbr %isfin, finseq(seq, paylen, acked), maybeack(acked)
+  finseq(seq: i64, paylen: i64, acked: i64):
+    %want = add i64 seq, paylen
+    %wm = and i64 %want, 4294967295
+    %rcv = call i64 ld64(75792)
+    %ok = icmp.eq i64 %wm, %rcv
+    condbr %ok, gotfin(), maybeack(acked)
+  gotfin():
+    %rcv = call i64 ld64(75792)
+    %nr = add i64 %rcv, 1
+    %nrm = and i64 %nr, 4294967295
+    call void st64(75792, %nrm)
+    call void st64(75832, 1)
+    br maybeack(1)
+  maybeack(acked: i64):
+    %need = icmp.ne i64 acked, 0
+    condbr %need, doack(), fin()
+  doack():
+    call void tcp_send(16, 0, 0)
+    ret
+  fin():
+    ret
+}
+
+fn cmd_tcp(ptr) -> void {
+  entry(rest: ptr):
+    %e1 = iconst i64 1
+    %e3 = iconst i64 3
+    %e250 = iconst i64 250
+    %e300 = iconst i64 300
+    %e500 = iconst i64 500
+    %e75776 = iconst i64 75776
+    %e75824 = iconst i64 75824
+    %e76872 = iconst i64 76872
+    %p = call i64 ld64(53248)
+    %no = icmp.eq i64 %p, 0
+    condbr %no, nonet(), args(rest)
+  nonet():
+    %s = call ptr s_netno()
+    call void con_write(%s)
+    ret
+  args(rest: ptr):
+    call void split_name(rest)
+    %tp = call i64 ld64(49216)
+    %tl = call i64 ld64(49224)
+    %bad = icmp.eq i64 %tl, 0
+    condbr %bad, usage(), parsep(%tp, %tl, 0, 0)
+  usage():
+    %s = call ptr s_tcpuse()
+    call void con_write(%s)
+    ret
+  parsep(tp: i64, tl: i64, i: i64, v: i64):
+    %done = icmp.sge i64 i, tl
+    condbr %done, haveport(v), pdigit(tp, tl, i, v)
+  pdigit(tp: i64, tl: i64, i: i64, v: i64):
+    %a = add i64 tp, i
+    %c0 = call i64 mload8(%a)
+    %d = sub i64 %c0, 48
+    %lo = icmp.sge i64 %d, 0
+    %hi = icmp.sle i64 %d, 9
+    %z1 = zext i64 %lo
+    %z2 = zext i64 %hi
+    %ok = and i64 %z1, %z2
+    %isok = icmp.ne i64 %ok, 0
+    condbr %isok, pacc(tp, tl, i, v, %d), usage()
+  pacc(tp: i64, tl: i64, i: i64, v: i64, d: i64):
+    %t1 = shl i64 v, 3
+    %t2 = shl i64 v, 1
+    %vs = add i64 %t1, %t2
+    %nv = add i64 %vs, d
+    %i2 = add i64 i, 1
+    br parsep(tp, tl, %i2, %nv)
+  haveport(v: i64):
+    %zero = icmp.eq i64 v, 0
+    condbr %zero, usage(), text(v)
+  text(port: i64):
+    %tp = call i64 ld64(49232)
+    br tlen(%tp, %tp, port)
+  tlen(p: i64, start: i64, port: i64):
+    %c = call i64 mload8(p)
+    %z = icmp.eq i64 %c, 0
+    condbr %z, sized(start, p, port), tnext(p, start, port)
+  tnext(p: i64, start: i64, port: i64):
+    %p2 = add i64 p, 1
+    br tlen(%p2, start, port)
+  sized(start: i64, end: i64, port: i64):
+    %len = sub i64 end, start
+    %bad = icmp.eq i64 %len, 0
+    condbr %bad, usage(), setup(start, %len, port)
+  setup(tp: i64, tl: i64, port: i64):
+    call void st64(75808, port)
+    call void st64(75816, 49152)
+    call void st64(75824, 0)
+    call void st64(75832, 0)
+    call void st64(76872, 0)
+    call void st64(75776, 0)
+    %peer = call i64 tcp_peer()
+    %gw = call i64 gwip()
+    call void copy_ip(%peer, 0, %gw)
+    %known = call i64 ld64(53312)
+    %yes = icmp.ne i64 %known, 0
+    condbr %yes, connect(tp, tl), arp(tp, tl)
+  arp(tp: i64, tl: i64):
+    call void arp_ask()
+    %t0 = call i64 ld64(0)
+    br awaitarp(%t0, tp, tl)
+  awaitarp(t0: i64, tp: i64, tl: i64):
+    call void net_poll()
+    %known = call i64 ld64(53312)
+    %yes = icmp.ne i64 %known, 0
+    condbr %yes, connect(tp, tl), arptick(t0, tp, tl)
+  arptick(t0: i64, tp: i64, tl: i64):
+    %now = call i64 ld64(0)
+    %el = sub i64 %now, t0
+    %over = icmp.sgt i64 %el, 250
+    condbr %over, fail(), awaitarp(t0, tp, tl)
+  fail():
+    %s = call ptr s_tcpfail()
+    call void con_write(%s)
+    call void st64(75776, 0)
+    ret
+  connect(tp: i64, tl: i64):
+    %tk = call i64 ld64(0)
+    %isn = and i64 %tk, 65535
+    %isn2 = add i64 %isn, 4096
+    call void st64(75784, %isn2)
+    call void st64(75792, 0)
+    call void st64(75776, 1)
+    call void tcp_send(2, 0, 0)
+    %t0 = call i64 ld64(0)
+    br awaitsyn(%t0, tp, tl)
+  awaitsyn(t0: i64, tp: i64, tl: i64):
+    call void net_poll()
+    %st = call i64 ld64(75776)
+    %ok = icmp.eq i64 %st, 2
+    condbr %ok, senddata(tp, tl), syntick(t0, tp, tl)
+  syntick(t0: i64, tp: i64, tl: i64):
+    %st = call i64 ld64(75776)
+    %dead = icmp.eq i64 %st, 0
+    condbr %dead, fail(), syntick2(t0, tp, tl)
+  syntick2(t0: i64, tp: i64, tl: i64):
+    %now = call i64 ld64(0)
+    %el = sub i64 %now, t0
+    %over = icmp.sgt i64 %el, 300
+    condbr %over, fail(), awaitsyn(t0, tp, tl)
+  senddata(tp: i64, tl: i64):
+    call void tcp_send(24, tp, tl)
+    %t0 = call i64 ld64(0)
+    br awaitdata(%t0)
+  awaitdata(t0: i64):
+    call void net_poll()
+    %rx = call i64 ld64(75824)
+    %has = icmp.sgt i64 %rx, 0
+    condbr %has, print(%rx, t0), finchk2(t0)
+  print(rx: i64, t0: i64):
+    %buf = call i64 tcp_rxbuf()
+    br ploop(%buf, rx, 0, t0)
+  ploop(buf: i64, rx: i64, j: i64, t0: i64):
+    %done = icmp.sge i64 j, rx
+    condbr %done, printed(t0), pbody(buf, rx, j, t0)
+  pbody(buf: i64, rx: i64, j: i64, t0: i64):
+    %a = add i64 buf, j
+    %c = call i64 mload8(%a)
+    call void con_putc(%c)
+    %j2 = add i64 j, 1
+    br ploop(buf, rx, %j2, t0)
+  printed(t0: i64):
+    call void st64(75824, 0)
+    call void st64(76872, 1)
+    br finchk2(t0)
+  finchk2(t0: i64):
+    %f = call i64 ld64(75832)
+    %yes = icmp.ne i64 %f, 0
+    condbr %yes, close(), datatick(t0)
+  datatick(t0: i64):
+    %now = call i64 ld64(0)
+    %el = sub i64 %now, t0
+    %over = icmp.sgt i64 %el, 500
+    condbr %over, timeout(), awaitdata(t0)
+  timeout():
+    %pr = call i64 ld64(76872)
+    %yes = icmp.ne i64 %pr, 0
+    condbr %yes, close(), norep()
+  norep():
+    %s = call ptr s_tcpnorep()
+    call void con_write(%s)
+    br close()
+  close():
+    %st = call i64 ld64(75776)
+    %live = icmp.ne i64 %st, 0
+    condbr %live, finwait(), closed()
+  finwait():
+    call void tcp_send(17, 0, 0)
+    call void st64(75776, 3)
+    %t0 = call i64 ld64(0)
+    br drain(%t0)
+  drain(t0: i64):
+    call void net_poll()
+    %now = call i64 ld64(0)
+    %el = sub i64 %now, t0
+    %over = icmp.sgt i64 %el, 30
+    condbr %over, closed(), drain(t0)
+  closed():
+    call void st64(75776, 0)
+    %s = call ptr s_tcpclosed()
+    call void con_write(%s)
+    ret
+}
+; K0 template part 8: native module execution. A module can
+; also be compiled ahead of time by the Krell x86_64 backend
+; and linked at the native region base (0x2000000); nrun
+; loads such an image there and calls its main as native
+; code through the k_exec machine service. The image format
+; (built by natlink.py) is a 16-byte header - magic "K0N1",
+; entry offset, file size, memory size (file size plus the
+; zeroed bss span) - followed by the flat image. The six
+; host services are the same names the interpreter exposes,
+; bound at link time to the nk* functions below; pointers
+; here are real addresses, not module-space offsets.
+; nat_init reserves the region frames at boot so the frame
+; allocator never hands them out. The region is 1 MiB:
+; image at the base, module heap bump-allocated from
+; offset 512 KiB. State (arena): 76992 heap pointer.
+
+fn nat_init() -> void {
+  entry():
+    call void set_range(8192, 8448)
+    %nf = call i64 count_free()
+    call void st64(488, %nf)
+    ret
+}
+
+fn puti(i64) -> void {
+  entry(v: i64):
+    %neg = icmp.slt i64 v, 0
+    condbr %neg, ng(v), pos(v)
+  ng(v: i64):
+    call void con_putc(45)
+    %p = sub i64 0, v
+    call void putu(%p)
+    ret
+  pos(v: i64):
+    call void putu(v)
+    ret
+}
+
+fn nkprint(i64) -> void {
+  entry(p: i64):
+    br loop(p, 0)
+  loop(p: i64, i: i64):
+    %a = add i64 p, i
+    %c = call i64 mload8(%a)
+    %z = icmp.eq i64 %c, 0
+    condbr %z, fin(), body(p, i, %c)
+  body(p: i64, i: i64, c: i64):
+    call void con_putc(c)
+    %i2 = add i64 i, 1
+    br loop(p, %i2)
+  fin():
+    ret
+}
+
+fn nkputn(i64) -> void {
+  entry(v: i64):
+    call void puti(v)
+    ret
+}
+
+fn nkputc(i64) -> void {
+  entry(c: i64):
+    call void con_putc(c)
+    ret
+}
+
+fn nkticks() -> i64 {
+  entry():
+    %t = call i64 ld64(0)
+    ret %t
+}
+
+fn nkalloc(i64) -> i64 {
+  entry(n: i64):
+    %cur = call i64 ld64(76992)
+    %a15 = add i64 %cur, 15
+    %p = and i64 %a15, -16
+    %end = add i64 %p, n
+    %over = icmp.sgt i64 %end, 34603008
+    condbr %over, none(), take(%p, %end)
+  take(p: i64, end: i64):
+    call void st64(76992, end)
+    ret p
+  none():
+    ret 0
+}
+
+fn nkfree(i64) -> void {
+  entry(p: i64):
+    ret
+}
+
+fn cmd_nrun(ptr) -> void {
+  entry(rest: ptr):
+    %e1 = iconst i64 1
+    %e10 = iconst i64 10
+    %p = bitcast i64 rest
+    br skipsp(%p)
+  skipsp(p: i64):
+    %c = call i64 mload8(p)
+    %sp = icmp.eq i64 %c, 32
+    condbr %sp, next(p), parse(p, 0, 0)
+  next(p: i64):
+    %p2 = add i64 p, 1
+    br skipsp(%p2)
+  parse(p: i64, acc: i64, any: i64):
+    %c = call i64 mload8(p)
+    %lo = icmp.sge i64 %c, 48
+    %hi = icmp.sle i64 %c, 57
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, dig(p, acc, any), have(acc, any)
+  dig(p: i64, acc: i64, any: i64):
+    %c = call i64 mload8(p)
+    %d = sub i64 %c, 48
+    %a10 = mul i64 acc, 10
+    %a2 = add i64 %a10, %d
+    %p2 = add i64 p, 1
+    br parse(%p2, %a2, 1)
+  have(acc: i64, any: i64):
+    %no = icmp.eq i64 any, 0
+    condbr %no, use(), chk(acc)
+  use():
+    %s = call ptr s_natuse()
+    call void con_write(%s)
+    ret
+  chk(idx: i64):
+    %cnt = call i64 ld64(45376)
+    %bad = icmp.sge i64 idx, %cnt
+    %neg = icmp.slt i64 idx, 0
+    %nz = zext i64 %bad
+    %nz2 = zext i64 %neg
+    %either = or i64 %nz, %nz2
+    %is = icmp.ne i64 %either, 0
+    condbr %is, nomod(), go(idx)
+  nomod():
+    %s = call ptr s_natno()
+    call void con_write(%s)
+    ret
+  go(idx: i64):
+    %pre = call ptr s_runpre()
+    call void con_write(%pre)
+    %toff = mul i64 idx, 32
+    %tp = add i64 45384, %toff
+    %np = add i64 %tp, 16
+    %name = call i64 mload(%np)
+    %np2 = bitcast ptr %name
+    call void con_write(%np2)
+    call void con_putc(10)
+    %start = call i64 mload(%tp)
+    br magic(%start)
+  magic(start: i64):
+    %b0 = call i64 mload8(start)
+    %a1 = add i64 start, 1
+    %b1 = call i64 mload8(%a1)
+    %a2 = add i64 start, 2
+    %b2 = call i64 mload8(%a2)
+    %a3 = add i64 start, 3
+    %b3 = call i64 mload8(%a3)
+    %k0 = icmp.eq i64 %b0, 75
+    %k1 = icmp.eq i64 %b1, 48
+    %k2 = icmp.eq i64 %b2, 78
+    %k3 = icmp.eq i64 %b3, 49
+    %z0 = zext i64 %k0
+    %z1 = zext i64 %k1
+    %z2 = zext i64 %k2
+    %z3 = zext i64 %k3
+    %s1 = and i64 %z0, %z1
+    %s2 = and i64 %s1, %z2
+    %s3 = and i64 %s2, %z3
+    %ok = icmp.ne i64 %s3, 0
+    condbr %ok, load(start), notnat()
+  notnat():
+    %s = call ptr s_natbad()
+    call void con_write(%s)
+    ret
+  load(start: i64):
+    %ea = add i64 start, 4
+    %entry = call i64 mload32(%ea)
+    %fa = add i64 start, 8
+    %fsize = call i64 mload32(%fa)
+    %ma = add i64 start, 12
+    %msize = call i64 mload32(%ma)
+    %src = add i64 start, 16
+    call void copy_bytes(33554432, %src, %fsize)
+    %dst = add i64 33554432, %fsize
+    %zlen = sub i64 %msize, %fsize
+    call void mzero(%dst, %zlen)
+    call void st64(76992, 34078720)
+    %ep = add i64 33554432, %entry
+    br call(%ep)
+  call(ep: i64):
+    %rc = call i64 k_exec(ep)
+    %rc32 = and i64 %rc, 4294967295
+    %big = icmp.sge i64 %rc32, 2147483648
+    condbr %big, neg(%rc32), ex(%rc32)
+  neg(rc32: i64):
+    %v = sub i64 %rc32, 4294967296
+    br ex(%v)
+  ex(v: i64):
+    %s = call ptr s_runexit()
+    call void con_write(%s)
+    call void puti(v)
+    call void con_putc(10)
+    ret
+}
 fn exec_line() -> void {
   entry():
     %e1 = iconst i64 1
@@ -7355,9 +8136,25 @@ fn exec_line() -> void {
     %c = call ptr s_cping()
     %m = call i64 match(line, wlen, %c)
     %hit = icmp.ne i64 %m, 0
-    condbr %hit, doping(), dno(line, wlen)
+    condbr %hit, doping(), d18(line, wlen, rest)
   doping():
     call void cmd_ping()
+    ret
+  d18(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_ctcp()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, dotcp(rest), d19(line, wlen, rest)
+  dotcp(rest: ptr):
+    call void cmd_tcp(rest)
+    ret
+  d19(line: ptr, wlen: i64, rest: ptr):
+    %c = call ptr s_cnrun()
+    %m = call i64 match(line, wlen, %c)
+    %hit = icmp.ne i64 %m, 0
+    condbr %hit, donrun(rest), dno(line, wlen)
+  donrun(rest: ptr):
+    call void cmd_nrun(rest)
     ret
   dno(line: ptr, wlen: i64):
     %empty = icmp.eq i64 wlen, 0
@@ -7559,6 +8356,7 @@ fn main(i32, ptr) -> i32 {
     %hbase = call i64 ld64(45064)
     call void putu(%hbase)
     call void con_putc(10)
+    call void nat_init()
     call void fs_init()
     %fp = call ptr s_fsdisk()
     call void con_write(%fp)
