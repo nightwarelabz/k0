@@ -13,7 +13,9 @@ import ast, pathlib, re
 
 HERE = pathlib.Path(__file__).parent
 
-src = (HERE / "gen_kernel.py").read_text()
+ROOT = HERE.parent
+OUT = ROOT / "arch" / "aarch64"
+src = (ROOT / "kernel" / "gen_kernel.py").read_text()
 tables = {}
 for name in ("TAB_PLAIN", "TAB_SHIFT"):
     m = re.search(name + r"\s*=\s*(\[[^\]]*\])", src)
@@ -39,14 +41,14 @@ def emit(name, values):
     lines = []
     for i in range(0, 128, 16):
         lines.append("    .byte " + ",".join(str(v) for v in values[i:i+16]))
-    (HERE / name).write_text("\n".join(lines) + "\n")
+    (OUT / name).write_text("\n".join(lines) + "\n")
 
 emit("scmap.inc", scmap)
 emit("scshift.inc", scshift)
 
 mods = ["modules/hello.krel", "modules/fib.krel", "modules/mem.krel"]
-with open(HERE / "boot_arm.inc", "w") as f:
+with open(OUT / "boot_arm.inc", "w") as f:
     for i, path in enumerate(mods):
-        size = (HERE / path).stat().st_size
+        size = (ROOT / path).stat().st_size
         f.write(f"    .equ ARM_MOD{i}_LEN, {size}\n")
 print("mkarm: includes generated")

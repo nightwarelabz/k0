@@ -7,7 +7,7 @@ Asserts the boot sequence, the shell prompt, and an interpreted
 module run."""
 import socket, subprocess, time, os, pathlib
 
-HERE = pathlib.Path(__file__).parent
+HERE = pathlib.Path(__file__).parent.parent
 SOCK = "/tmp/k0arm-ser.sock"
 for p in (SOCK,):
     try: os.unlink(p)
@@ -22,6 +22,10 @@ qemu = subprocess.Popen([
     "-device", "loader,file=modules/fib.krel,addr=0x44800000",
     "-device", "loader,file=modules/mem.krel,addr=0x45000000",
     "-display", "none", "-no-reboot",
+    # Blocking server (no "nowait"): QEMU holds the guest until
+    # the client connects, so no boot output can be lost to the
+    # connect race. With nowait the guest starts immediately and
+    # early serial lines vanish before the driver connects.
     "-serial", f"unix:{SOCK},server",
 ], cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -38,7 +42,9 @@ while time.time() - t0 < 15:
         except OSError:
             ser = None
     time.sleep(0.1)
-assert ser is not None, "serial socket never appeared"
+if ser is None:
+    qemu.terminate()
+    raise AssertionError("serial socket never appeared")
 
 def pump(dur):
     end = time.time() + dur

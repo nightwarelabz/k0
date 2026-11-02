@@ -13,12 +13,12 @@ the flat image."""
 import os, pathlib, re, struct, subprocess, sys
 
 HERE = pathlib.Path(__file__).parent
-KRELLC = pathlib.Path.home() / "workspace" / "rung" / "krellc"
+KRELLC = pathlib.Path(os.environ.get("KRELLC", pathlib.Path.home() / "workspace" / "rung" / "krellc"))
 NAT_BASE = 0x2000000
 SERVICES = {"kprint": "nkprint", "kputn": "nkputn",
             "kputc": "nkputc", "kticks": "nkticks",
             "kalloc": "nkalloc", "kfree": "nkfree"}
-BUILD = HERE / "natbuild"
+BUILD = HERE.parent / "natbuild"
 
 
 def run(*args, env=None):
@@ -37,8 +37,8 @@ def symbols(elf):
 
 
 def main():
-    src = sys.argv[1]
-    out = sys.argv[2]
+    src = str(pathlib.Path(sys.argv[1]).absolute())
+    out = str(pathlib.Path(sys.argv[2]).absolute())
     stem = pathlib.Path(src).stem
     BUILD.mkdir(exist_ok=True)
     krel = BUILD / f"{stem}.krel"
@@ -52,12 +52,12 @@ def main():
     run(str(KRELLC), "build", str(krel), "--target", "x86_64",
         "-o", str(asm), env=env)
     run("cc", "-c", str(asm), "-o", str(obj))
-    ksyms = symbols(HERE / "k0.elf")
+    ksyms = symbols(HERE.parent / "k0.elf")
     defsyms = []
     for call, kern in SERVICES.items():
         assert kern in ksyms, f"kernel symbol {kern} missing"
         defsyms.append(f"--defsym={call}={ksyms[kern]}")
-    run("ld", "-T", "nat.ld", *defsyms, str(obj), "-o", str(elf))
+    run("ld", "-T", str(HERE.parent / "arch" / "x86_64" / "nat.ld"), *defsyms, str(obj), "-o", str(elf))
     msyms = symbols(elf)
     entry_off = msyms["main"] - NAT_BASE
     mem_end = msyms["_mem_end"]
@@ -65,7 +65,7 @@ def main():
     data = img.read_bytes()
     header = b"K0N1" + struct.pack("<III", entry_off, len(data),
                                    mem_end - NAT_BASE)
-    (HERE / out).write_bytes(header + data)
+    pathlib.Path(out).write_bytes(header + data)
     print(f"{out}: entry +{entry_off}, image {len(data)} bytes, "
           f"memory {mem_end - NAT_BASE} bytes")
 

@@ -7,7 +7,7 @@ lists the filesystem (which lives at LBA 8192 of this
 image) and stores a file. Boot 2 reads the file back."""
 import socket, subprocess, time, os, pathlib
 
-HERE = pathlib.Path(__file__).parent
+HERE = pathlib.Path(__file__).parent.parent
 SOCK = "/tmp/k0-mon.sock"
 KEYMAP = {" ": "spc", "\n": "ret", ".": "dot", "-": "minus"}
 

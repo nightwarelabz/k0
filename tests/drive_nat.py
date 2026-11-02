@@ -8,7 +8,7 @@ run on a native image and nrun on an interpreted one are
 both refused with the matching message."""
 import socket, subprocess, time, os, pathlib
 
-HERE = pathlib.Path(__file__).parent
+HERE = pathlib.Path(__file__).parent.parent
 SOCK = "/tmp/k0-mon.sock"
 try: os.unlink(SOCK)
 except FileNotFoundError: pass

@@ -3,7 +3,7 @@
 Both boots share the same disk.img."""
 import socket, subprocess, sys, time, os, pathlib
 
-HERE = pathlib.Path(__file__).parent
+HERE = pathlib.Path(__file__).parent.parent
 SOCK = "/tmp/k0-mon.sock"
 
 def boot(tag, commands, logname):
