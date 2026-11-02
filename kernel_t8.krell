@@ -1,0 +1,208 @@
+; K0 template part 8: native module execution. A module can
+; also be compiled ahead of time by the Krell x86_64 backend
+; and linked at the native region base (0x2000000); nrun
+; loads such an image there and calls its main as native
+; code through the k_exec machine service. The image format
+; (built by natlink.py) is a 16-byte header - magic "K0N1",
+; entry offset, file size, memory size (file size plus the
+; zeroed bss span) - followed by the flat image. The six
+; host services are the same names the interpreter exposes,
+; bound at link time to the nk* functions below; pointers
+; here are real addresses, not module-space offsets.
+; nat_init reserves the region frames at boot so the frame
+; allocator never hands them out. The region is 1 MiB:
+; image at the base, module heap bump-allocated from
+; offset 512 KiB. State (arena): 76992 heap pointer.
+
+fn nat_init() -> void {
+  entry():
+    call void set_range(8192, 8448)
+    %nf = call i64 count_free()
+    call void st64(488, %nf)
+    ret
+}
+
+fn puti(i64) -> void {
+  entry(v: i64):
+    %neg = icmp.slt i64 v, 0
+    condbr %neg, ng(v), pos(v)
+  ng(v: i64):
+    call void con_putc(45)
+    %p = sub i64 0, v
+    call void putu(%p)
+    ret
+  pos(v: i64):
+    call void putu(v)
+    ret
+}
+
+fn nkprint(i64) -> void {
+  entry(p: i64):
+    br loop(p, 0)
+  loop(p: i64, i: i64):
+    %a = add i64 p, i
+    %c = call i64 mload8(%a)
+    %z = icmp.eq i64 %c, 0
+    condbr %z, fin(), body(p, i, %c)
+  body(p: i64, i: i64, c: i64):
+    call void con_putc(c)
+    %i2 = add i64 i, 1
+    br loop(p, %i2)
+  fin():
+    ret
+}
+
+fn nkputn(i64) -> void {
+  entry(v: i64):
+    call void puti(v)
+    ret
+}
+
+fn nkputc(i64) -> void {
+  entry(c: i64):
+    call void con_putc(c)
+    ret
+}
+
+fn nkticks() -> i64 {
+  entry():
+    %t = call i64 ld64(0)
+    ret %t
+}
+
+fn nkalloc(i64) -> i64 {
+  entry(n: i64):
+    %cur = call i64 ld64(76992)
+    %a15 = add i64 %cur, 15
+    %p = and i64 %a15, -16
+    %end = add i64 %p, n
+    %over = icmp.sgt i64 %end, 34603008
+    condbr %over, none(), take(%p, %end)
+  take(p: i64, end: i64):
+    call void st64(76992, end)
+    ret p
+  none():
+    ret 0
+}
+
+fn nkfree(i64) -> void {
+  entry(p: i64):
+    ret
+}
+
+fn cmd_nrun(ptr) -> void {
+  entry(rest: ptr):
+    %e1 = iconst i64 1
+    %e10 = iconst i64 10
+    %p = bitcast i64 rest
+    br skipsp(%p)
+  skipsp(p: i64):
+    %c = call i64 mload8(p)
+    %sp = icmp.eq i64 %c, 32
+    condbr %sp, next(p), parse(p, 0, 0)
+  next(p: i64):
+    %p2 = add i64 p, 1
+    br skipsp(%p2)
+  parse(p: i64, acc: i64, any: i64):
+    %c = call i64 mload8(p)
+    %lo = icmp.sge i64 %c, 48
+    %hi = icmp.sle i64 %c, 57
+    %lz = zext i64 %lo
+    %hz = zext i64 %hi
+    %both = and i64 %lz, %hz
+    %is = icmp.ne i64 %both, 0
+    condbr %is, dig(p, acc, any), have(acc, any)
+  dig(p: i64, acc: i64, any: i64):
+    %c = call i64 mload8(p)
+    %d = sub i64 %c, 48
+    %a10 = mul i64 acc, 10
+    %a2 = add i64 %a10, %d
+    %p2 = add i64 p, 1
+    br parse(%p2, %a2, 1)
+  have(acc: i64, any: i64):
+    %no = icmp.eq i64 any, 0
+    condbr %no, use(), chk(acc)
+  use():
+    %s = call ptr s_natuse()
+    call void con_write(%s)
+    ret
+  chk(idx: i64):
+    %cnt = call i64 ld64(45376)
+    %bad = icmp.sge i64 idx, %cnt
+    %neg = icmp.slt i64 idx, 0
+    %nz = zext i64 %bad
+    %nz2 = zext i64 %neg
+    %either = or i64 %nz, %nz2
+    %is = icmp.ne i64 %either, 0
+    condbr %is, nomod(), go(idx)
+  nomod():
+    %s = call ptr s_natno()
+    call void con_write(%s)
+    ret
+  go(idx: i64):
+    %pre = call ptr s_runpre()
+    call void con_write(%pre)
+    %toff = mul i64 idx, 32
+    %tp = add i64 45384, %toff
+    %np = add i64 %tp, 16
+    %name = call i64 mload(%np)
+    %np2 = bitcast ptr %name
+    call void con_write(%np2)
+    call void con_putc(10)
+    %start = call i64 mload(%tp)
+    br magic(%start)
+  magic(start: i64):
+    %b0 = call i64 mload8(start)
+    %a1 = add i64 start, 1
+    %b1 = call i64 mload8(%a1)
+    %a2 = add i64 start, 2
+    %b2 = call i64 mload8(%a2)
+    %a3 = add i64 start, 3
+    %b3 = call i64 mload8(%a3)
+    %k0 = icmp.eq i64 %b0, 75
+    %k1 = icmp.eq i64 %b1, 48
+    %k2 = icmp.eq i64 %b2, 78
+    %k3 = icmp.eq i64 %b3, 49
+    %z0 = zext i64 %k0
+    %z1 = zext i64 %k1
+    %z2 = zext i64 %k2
+    %z3 = zext i64 %k3
+    %s1 = and i64 %z0, %z1
+    %s2 = and i64 %s1, %z2
+    %s3 = and i64 %s2, %z3
+    %ok = icmp.ne i64 %s3, 0
+    condbr %ok, load(start), notnat()
+  notnat():
+    %s = call ptr s_natbad()
+    call void con_write(%s)
+    ret
+  load(start: i64):
+    %ea = add i64 start, 4
+    %entry = call i64 mload32(%ea)
+    %fa = add i64 start, 8
+    %fsize = call i64 mload32(%fa)
+    %ma = add i64 start, 12
+    %msize = call i64 mload32(%ma)
+    %src = add i64 start, 16
+    call void copy_bytes(33554432, %src, %fsize)
+    %dst = add i64 33554432, %fsize
+    %zlen = sub i64 %msize, %fsize
+    call void mzero(%dst, %zlen)
+    call void st64(76992, 34078720)
+    %ep = add i64 33554432, %entry
+    br call(%ep)
+  call(ep: i64):
+    %rc = call i64 k_exec(ep)
+    %rc32 = and i64 %rc, 4294967295
+    %big = icmp.sge i64 %rc32, 2147483648
+    condbr %big, neg(%rc32), ex(%rc32)
+  neg(rc32: i64):
+    %v = sub i64 %rc32, 4294967296
+    br ex(%v)
+  ex(v: i64):
+    %s = call ptr s_runexit()
+    call void con_write(%s)
+    call void puti(v)
+    call void con_putc(10)
+    ret
+}

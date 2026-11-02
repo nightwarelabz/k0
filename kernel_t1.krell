@@ -52,6 +52,7 @@ extern k_cli() -> void
 extern k_hlt() -> void
 extern k_stub_base() -> i64
 extern k_arena_base() -> i64
+extern k_exec(i64) -> i64
 
 ; ---- arena access ---------------------------------------------
 

@@ -19,6 +19,8 @@
 #   k_hlt()                halt until the next interrupt
 #   k_stub_base() -> i64   address of the interrupt stub table
 #   k_arena_base() -> i64  address of the 1 MiB kernel arena
+#   k_exec(addr) -> i64    call native code at addr as
+#                          main(0, NULL); its return value
 
 .intel_syntax noprefix
 
@@ -232,6 +234,20 @@ k_stub_base:
 .global k_arena_base
 k_arena_base:
     mov rax, offset k_arena
+    ret
+
+# Call a native module entry point. The module main follows
+# the same SysV convention as the kernel entry: arguments in
+# rdi/rsi, result in rax. The stack is re-aligned so the
+# callee sees the standard post-call alignment.
+.global k_exec
+k_exec:
+    mov rax, rdi
+    xor edi, edi
+    xor esi, esi
+    sub rsp, 8
+    call rax
+    add rsp, 8
     ret
 
 # ---- interrupt stubs --------------------------------------------

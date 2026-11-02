@@ -27,17 +27,20 @@ STRINGS = [
     ("ints", "k0: interrupts live: IDT 256 | PIC remapped | PIT 100 Hz"),
     ("ready", "k0: scheduler running. type help."),
     ("prompt", "k0> "),
-    ("help", "commands: help about mem ticks ps alloc free clear echo heap htest mods run dir cat store ping\n"
+    ("help", "commands: help about mem ticks ps alloc free clear echo heap htest mods run nrun dir cat store ping tcp\n"
              "  alloc  take a 4 KiB frame and write a test pattern\n"
              "  free   give the frame back\n"
              "  heap   heap state: base, free bytes, live blocks, largest block\n"
              "  htest  heap self-test: patterns, reuse, coalescing\n"
+             "  tcp    tcp <port> <text>: connect to 10.0.2.2 on the port,\n"
+             "         send the text, print the reply\n"
+             "  nrun   nrun <index>: run a native module (compiled Krell)\n"
              "  ps     the scheduler table with work counters\n"),
     ("about", "K0: boot, console, serial, physical memory, interrupts,\n"
               "keyboard, scheduler, shell, heap, module runner,\n"
               "filesystem, framebuffer console and network driver -\n"
               "all written in Krell.\n"
-              "The machine layer is twelve services in boot.s.\n"),
+              "The machine layer is thirteen services in boot.s.\n"),
     ("unknown", "unknown command: "),
     ("exc", "EXCEPTION vector "),
     ("halt", " - halted"),
@@ -98,6 +101,15 @@ STRINGS = [
     ("fsnone", "none\n"),
     ("fsbytes", " bytes\n"),
     ("cping", "ping"),
+    ("ctcp", "tcp"),
+    ("tcpuse", "usage: tcp <port> <text>\n"),
+    ("tcpfail", "tcp: connect failed\n"),
+    ("tcpnorep", "tcp: no reply\n"),
+    ("tcpclosed", "tcp: closed\n"),
+    ("cnrun", "nrun"),
+    ("natuse", "usage: nrun <index>\n"),
+    ("natno", "nrun: no such module\n"),
+    ("natbad", "nrun: not a native module\n"),
     ("netpre", "k0: network: "),
     ("netmac", "e1000 mac "),
     ("netip", " ip 10.0.2.15\n"),
@@ -185,7 +197,8 @@ marker = "fn exec_line() -> void {"
 head2, tail2 = t2.split(marker, 1)
 parts = [t1.replace("@@DATA@@", "\n".join(out)), head2]
 for extra in ("kernel_t3.krell", "kernel_t4.krell",
-              "kernel_t5.krell", "kernel_t6.krell"):
+              "kernel_t5.krell", "kernel_t6.krell",
+              "kernel_t7.krell", "kernel_t8.krell"):
     f = HERE / extra
     if f.exists():
         parts.append(f.read_text())

@@ -571,7 +571,13 @@ fn handle_pkt(i64, i64) -> void {
     %a = add i64 buf, 23
     %pr = call i64 mload8(%a)
     %icmp = icmp.eq i64 %pr, 1
-    condbr %icmp, icmp(buf, len), fin()
+    condbr %icmp, icmp(buf, len), tcpchk(buf, len, %pr)
+  tcpchk(buf: i64, len: i64, pr: i64):
+    %istcp = icmp.eq i64 pr, 6
+    condbr %istcp, istcp(buf, len), fin()
+  istcp(buf: i64, len: i64):
+    call void tcp_handle(buf, len)
+    ret
   icmp(buf: i64, len: i64):
     call void icmp_handle(buf, len)
     ret
