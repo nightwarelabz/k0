@@ -100,7 +100,8 @@ el1_in:
     add     x0, x0, x28
     mov     x1, x28                   // PA of first block
     mov     x2, #64
-2:  orr     x3, x1, #0x701
+2:  orr     x3, x1, #0x700            // AF + inner shareable
+    orr     x3, x3, #1                // + valid block
     str     x3, [x0], #8
     add     x1, x1, #0x200000
     subs    x2, x2, #1
@@ -110,11 +111,15 @@ el1_in:
     ldr     x0, =arm_l2
     add     x0, x0, x28
     mov     x1, #0x09000000
-    orr     x1, x1, #0x405
+    orr     x1, x1, #0x400            // AF
+    orr     x1, x1, #0x4              // AttrIndx 1 (device)
+    orr     x1, x1, #0x1              // valid block
     str     x1, [x0, #512]
     // L2[65]: VA 0x08200000 -> GIC PA 0x08000000, device
     mov     x1, #0x08000000
-    orr     x1, x1, #0x405
+    orr     x1, x1, #0x400            // AF
+    orr     x1, x1, #0x4              // AttrIndx 1 (device)
+    orr     x1, x1, #0x1              // valid block
     str     x1, [x0, #520]
 
     // memory attributes: index 0 normal WB, index 1 device nGnRE
